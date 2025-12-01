@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/IsaacLab" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unitree_rl_lab" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/unitree_ros" vcs="Git" />
+  </component>
+</project>
