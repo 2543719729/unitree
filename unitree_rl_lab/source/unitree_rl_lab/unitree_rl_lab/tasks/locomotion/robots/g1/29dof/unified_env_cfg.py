@@ -204,13 +204,16 @@ class UnifiedEventCfg:
         },
     )
 
-    # 重置时：随机选择模式（核心！）
+    # 重置时：根据地形选择模式（核心！）
+    # 注意：当前简化实现使用随机模式，实际训练时模式与地形可能不完全匹配
+    # 这是一种数据增强策略，让策略学习在各种条件下都能工作
     reset_mode = EventTerm(
-        func=mdp.reset_mode_randomly,  # 需要在 mdp 中实现
+        func=mdp.reset_mode_randomly,
         mode="reset",
         params={
             "num_modes": 4,
-            "mode_probabilities": [0.25, 0.25, 0.25, 0.25],  # 等概率
+            # 调整概率匹配地形分布：40%平地(模式0/1)，60%楼梯(模式2/3)
+            "mode_probabilities": [0.20, 0.20, 0.30, 0.30],
         },
     )
 
@@ -407,9 +410,10 @@ class UnifiedRewardsCfg:
     )
 
     # 模式自适应的向上进展奖励（楼梯模式时激活）
+    # 提高权重以鼓励楼梯攀爬行为
     upward_progress = RewTerm(
         func=mdp.upward_progress,
-        weight=0.5,  # 楼梯模式时有效
+        weight=1.0,  # 从 0.5 提高到 1.0，与速度跟踪同等重要
         params={},
     )
 
@@ -429,9 +433,11 @@ class UnifiedRewardsCfg:
     )
 
     # ========== 姿态奖励 ==========
+    # 注意：权重降低以避免惩罚楼梯攀爬时的高度变化
+    # 楼梯模式时高度会超过0.72m，过高的惩罚会抑制爬楼梯行为
     base_height_l2 = RewTerm(
         func=mdp.base_height_l2,
-        weight=-0.5,
+        weight=-0.2,  # 从 -0.5 降低到 -0.2，减少对楼梯模式的负面影响
         params={"asset_cfg": SceneEntityCfg("robot", body_names="torso_link"), "target_height": 0.72},
     )
 
