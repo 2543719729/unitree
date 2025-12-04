@@ -1,0 +1,10 @@
+[2025-11-25 18:03:14,085][ogn_registration][INFO] - Looking for Python nodes to register in omni.physx.fabric-107.3.26
+[2025-11-25 18:03:14,086][ogn_registration][INFO] -  -> Registered nodes from module omni.physxfabric at e:\isaacenv\lib\site-packages\isaacsim\extscache\omni.physx.fabric-107.3.26+107.3.3.wx64.r.cp311.u353
+[2025-11-25 18:03:14,087][ogn_registration][INFO] - Registering nodes in e:\isaacenv\lib\site-packages\isaacsim\extscache\omni.physx.fabric-107.3.26+107.3.3.wx64.r.cp311.u353 imported as omni.physxfabric with AutoNode config {}
+[2025-11-25 18:03:14,088][ogn_registration][INFO] - Registering Python Node Types from omni.physxfabric at e:\isaacenv\lib\site-packages\isaacsim\extscache\omni.physx.fabric-107.3.26+107.3.3.wx64.r.cp311.u353 in omni.physx.fabric
+[2025-11-25 18:03:14,089][ogn_registration][INFO] - ========================================================================================================================
+[2025-11-25 18:03:14,092][ogn_registration][INFO] - No dependency on omni.graph, therefore no nodes to register in omni.physx.fabric
+[2025-11-25 18:03:14,092][ogn_registration][INFO] - ...None found, no registration to do
+[2025-11-25 18:03:14,093][ogn_registration][INFO] - ...Skipping: No OmniGraph presence in the module omni.physxfabric - No nodes in this module, do not remember it
+[2025-11-25 18:03:14,093][ogn_registration][INFO] - Destroying registration record for omni.physx.fabric
+[2025-11-25 18:03:14,093][ogn_registration][INFO] - OGN register omni.physx.fabric-107.3.26 took 6857000.000000

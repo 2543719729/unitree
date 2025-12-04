@@ -1,0 +1,653 @@
+--- git status ---
+On branch main
+Your branch is ahead of 'origin/main' by 1 commit.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/__init__.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/observations.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/rewards.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/__init__.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/velocity_env_cfg.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/events.py
+	source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/stair_env_cfg.py
+	source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/unified_env_cfg.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/__init__.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/__init__.py
+index a003205..384d1c5 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/__init__.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/__init__.py
+@@ -3,5 +3,6 @@ from isaaclab_tasks.manager_based.locomotion.velocity.mdp import *  # noqa: F401
+ 
+ from .commands import *  # noqa: F401, F403
+ from .curriculums import *  # noqa: F401, F403
++from .events import *  # noqa: F401, F403
+ from .observations import *  # noqa: F401, F403
+ from .rewards import *  # noqa: F401, F403
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/observations.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/observations.py
+index b1df0d4..85434af 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/observations.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/observations.py
+@@ -8,6 +8,7 @@ if TYPE_CHECKING:
+ 
+ 
+ def gait_phase(env: ManagerBasedRLEnv, period: float) -> torch.Tensor:
++    """步态相位观测：返回 sin/cos 编码的步态周期"""
+     if not hasattr(env, "episode_length_buf"):
+         env.episode_length_buf = torch.zeros(env.num_envs, device=env.device, dtype=torch.long)
+ 
+@@ -17,3 +18,115 @@ def gait_phase(env: ManagerBasedRLEnv, period: float) -> torch.Tensor:
+     phase[:, 0] = torch.sin(global_phase * torch.pi * 2.0)
+     phase[:, 1] = torch.cos(global_phase * torch.pi * 2.0)
+     return phase
++
++
++def mode_flag(env: ManagerBasedRLEnv, num_modes: int = 4) -> torch.Tensor:
++    """
++    模式标志观测：返回 one-hot 编码的当前模式
++
++    用于条件策略，让网络知道当前处于哪种运行模式：
++        - 模式0 [1,0,0,0]: 平地盲走
++        - 模式1 [0,1,0,0]: 平地带传感器
++        - 模式2 [0,0,1,0]: 楼梯盲爬
++        - 模式3 [0,0,0,1]: 楼梯带传感器
++
++    Args:
++        env: 环境实例
++        num_modes: 模式数量，默认4
++
++    Returns:
++        shape (num_envs, num_modes) 的 one-hot 张量
++    """
++    # 初始化模式缓冲区（如果不存在）
++    if not hasattr(env, "_current_mode"):
++        # 默认模式0，后续由环境根据地形/传感器状态设置
++        env._current_mode = torch.zeros(env.num_envs, device=env.device, dtype=torch.long)
++
++    # 生成 one-hot 编码
++    mode_onehot = torch.zeros(env.num_envs, num_modes, device=env.device)
++    mode_onehot.scatter_(1, env._current_mode.unsqueeze(1), 1.0)
++
++    return mode_onehot
++
++
++def terrain_type_flag(env: ManagerBasedRLEnv) -> torch.Tensor:
++    """
++    地形类型标志：返回当前地形是否为楼梯
++
++    用于辅助模式判断：
++        - 0: 平地
++        - 1: 楼梯
++
++    Returns:
++        shape (num_envs, 1) 的张量
++    """
++    if not hasattr(env, "_terrain_is_stair"):
++        env._terrain_is_stair = torch.zeros(env.num_envs, 1, device=env.device)
++
++    return env._terrain_is_stair
++
++
++def sensor_available_flag(env: ManagerBasedRLEnv) -> torch.Tensor:
++    """
++    传感器可用标志：返回 height_scan 是否可用
++
++    用于辅助模式判断和降级逻辑：
++        - 0: 传感器不可用（盲模式）
++        - 1: 传感器可用
++
++    Returns:
++        shape (num_envs, 1) 的张量
++    """
++    if not hasattr(env, "_sensor_available"):
++        env._sensor_available = torch.ones(env.num_envs, 1, device=env.device)
++
++    return env._sensor_available
++
++
++def conditional_height_scan(
++    env: ManagerBasedRLEnv,
++    sensor_cfg: SceneEntityCfg,
++) -> torch.Tensor:
++    """
++    条件高度扫描：盲模式时输出置零
++
++    根据 _current_mode 决定是否使用 height_scan:
++        - 模式0/2 (盲模式): 输出全零
++        - 模式1/3 (传感器模式): 输出真实 height_scan
++
++    这让策略网络学会：当 mode_flag 指示盲模式时，忽略 height_scan 输入
++
++    Args:
++        env: 环境实例
++        sensor_cfg: 高度扫描器配置
++
++    Returns:
++        shape (num_envs, num_rays) 的高度扫描张量
++    """
++    from isaaclab.sensors import RayCaster
++
++    # 获取传感器
++    sensor: RayCaster = env.scene.sensors[sensor_cfg.name]
++
++    # 计算相对高度（与标准 height_scan 相同）
++    heights = sensor.data.pos_w[:, 2].unsqueeze(1) - sensor.data.ray_hits_w[..., 2] - 0.5
++
++    # 初始化模式缓冲区（如果不存在）
++    if not hasattr(env, "_current_mode"):
++        env._current_mode = torch.zeros(env.num_envs, device=env.device, dtype=torch.long)
++
++    # 创建盲模式掩码 (模式0和模式2是盲模式)
++    blind_mask = (env._current_mode == 0) | (env._current_mode == 2)
++
++    # 盲模式时置零
++    heights = torch.where(
++        blind_mask.unsqueeze(1).expand_as(heights),
++        torch.zeros_like(heights),
++        heights
++    )
++
++    return heights
++
++
++# 需要导入 SceneEntityCfg
++from isaaclab.managers import SceneEntityCfg
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/rewards.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/rewards.py
+index 95ddd8a..f347ebb 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/rewards.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/rewards.py
+@@ -9,7 +9,7 @@ except ImportError:
+     from isaaclab.utils.math import quat_rotate_inverse as quat_apply_inverse
+ from isaaclab.assets import Articulation, RigidObject
+ from isaaclab.managers import SceneEntityCfg
+-from isaaclab.sensors import ContactSensor
++from isaaclab.sensors import ContactSensor, RayCaster
+ 
+ if TYPE_CHECKING:
+     from isaaclab.envs import ManagerBasedRLEnv
+@@ -223,3 +223,151 @@ def joint_mirror(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirror_joint
+         )
+     reward *= 1 / len(mirror_joints) if len(mirror_joints) > 0 else 0
+     return reward
++
++
++"""
++Stair climbing rewards.
++楼梯攀爬专用奖励函数
++"""
++
++
++def upward_progress(
++    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
++) -> torch.Tensor:
++    """
++    向上进展奖励：鼓励机器人向上攀爬楼梯
++
++    计算每步的高度增量，对正向增量给予奖励。
++    使用累计高度差避免"跳起来再落回去"骗奖励的情况。
++
++    Args:
++        env: 环境实例
++        asset_cfg: 机器人资产配置
++
++    Returns:
++        奖励张量，形状为 (num_envs,)
++    """
++    asset: RigidObject = env.scene[asset_cfg.name]
++
++    # 获取当前基座高度
++    current_height = asset.data.root_pos_w[:, 2]
++
++    # 初始化或获取上一步高度
++    if not hasattr(env, "_prev_base_height"):
++        env._prev_base_height = current_height.clone()
++        env._initial_height = current_height.clone()
++
++    # 形状不一致时进行重置（例如环境数量变化时）
++    if env._prev_base_height.shape != current_height.shape:
++        env._prev_base_height = current_height.clone()
++    if env._initial_height.shape != current_height.shape:
++        env._initial_height = current_height.clone()
++
++    # 按回合重置缓存，避免跨回合累计
++    if hasattr(env, "reset_buf"):
++        reset_mask = env.reset_buf > 0
++        if torch.any(reset_mask):
++            env._prev_base_height = torch.where(reset_mask, current_height, env._prev_base_height)
++            env._initial_height = torch.where(reset_mask, current_height, env._initial_height)
++
++    # 计算高度增量
++    height_delta = current_height - env._prev_base_height
++
++    # 更新上一步高度
++    env._prev_base_height = current_height.clone()
++
++    # 对正向高度增量给予奖励，负向增量给予较小惩罚
++    # 使用 clamp 避免过大的奖励/惩罚
++    reward = torch.clamp(height_delta, -0.1, 0.2)
++
++    # 额外奖励：相对于初始高度的总进展
++    total_progress = current_height - env._initial_height
++    progress_bonus = torch.clamp(total_progress * 0.1, 0, 0.5)
++
++    return reward + progress_bonus
++
++
++def base_height_adaptive(
++    env: ManagerBasedRLEnv,
++    target_height: float,
++    sensor_cfg: SceneEntityCfg,
++    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
++) -> torch.Tensor:
++    """
++    自适应基座高度惩罚：相对于脚下地形的高度
++
++    使用 RayCaster 获取脚下地形高度，计算相对高度偏差。
++    这样在楼梯上爬升时不会被错误惩罚。
++
++    Args:
++        env: 环境实例
++        target_height: 目标相对高度（机器人基座相对于地形的高度）
++        sensor_cfg: 高度扫描器配置
++        asset_cfg: 机器人资产配置
++
++    Returns:
++        惩罚张量，形状为 (num_envs,)
++    """
++    asset: RigidObject = env.scene[asset_cfg.name]
++    sensor: RayCaster = env.scene.sensors[sensor_cfg.name]
++
++    # 获取机器人基座世界高度
++    base_height_world = asset.data.root_pos_w[:, 2]
++
++    # 从高度扫描器获取脚下地形高度
++    # RayCaster 的 ray_hits_w 包含射线击中点的世界坐标
++    # 取中心区域的射线作为脚下地形高度估计
++    ray_hits = sensor.data.ray_hits_w
++
++    # 获取射线模式的尺寸信息
++    num_rays = ray_hits.shape[1]
++
++    # 取中心区域的射线（假设网格中心对应机器人正下方）
++    center_idx = num_rays // 2
++    # 取中心附近几条射线的平均值
++    start_idx = max(0, center_idx - 5)
++    end_idx = min(num_rays, center_idx + 5)
++
++    terrain_height = ray_hits[:, start_idx:end_idx, 2].mean(dim=1)
++
++    # 计算相对高度
++    relative_height = base_height_world - terrain_height
++
++    # 计算与目标高度的偏差
++    height_error = torch.square(relative_height - target_height)
++
++    return height_error
++
++
++def stair_forward_progress(
++    env: ManagerBasedRLEnv,
++    stair_direction: list[float] = [1.0, 0.0],
++    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
++) -> torch.Tensor:
++    """
++    沿楼梯方向的前进奖励
++
++    Args:
++        env: 环境实例
++        stair_direction: 楼梯方向单位向量 [x, y]
++        asset_cfg: 机器人资产配置
++
++    Returns:
++        奖励张量，形状为 (num_envs,)
++    """
++    asset: RigidObject = env.scene[asset_cfg.name]
++
++    # 获取机器人在世界坐标系下的线速度
++    lin_vel = asset.data.root_lin_vel_w[:, :2]
++
++    # 楼梯方向向量
++    stair_dir = torch.tensor(stair_direction, device=env.device)
++    stair_dir = stair_dir / torch.norm(stair_dir)
++
++    # 计算沿楼梯方向的速度分量
++    forward_vel = torch.sum(lin_vel * stair_dir, dim=1)
++
++    # 对正向速度给予奖励
++    reward = torch.clamp(forward_vel, 0, 1.0)
++
++    return reward
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/__init__.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/__init__.py
+index e67a144..42e177e 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/__init__.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/__init__.py
+@@ -1,5 +1,18 @@
+ import gymnasium as gym
+ 
++# ============================================================================
++#                       4阶段训练任务注册
++# ============================================================================
++# 训练顺序：
++#   阶段1: Unitree-G1-29dof-Velocity        - 盲走（平地，无 height_scan）
++#   阶段2: Unitree-G1-29dof-Velocity-HeightScan - 带传感器行走（平地，有 height_scan）
++#   阶段3: Unitree-G1-29dof-Stair-Blind     - 盲爬楼梯（楼梯，无 height_scan）
++#   阶段4: Unitree-G1-29dof-Stair           - 带传感器爬楼梯（楼梯，有 height_scan）
++# ============================================================================
++
++# ============================================================================
++# 阶段1: 盲走（平地，无 height_scan）
++# ============================================================================
+ gym.register(
+     id="Unitree-G1-29dof-Velocity",
+     entry_point="isaaclab.envs:ManagerBasedRLEnv",
+@@ -10,3 +23,62 @@ gym.register(
+         "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
+     },
+ )
++
++# ============================================================================
++# 阶段2: 带传感器行走（平地，有 height_scan）
++# ============================================================================
++gym.register(
++    id="Unitree-G1-29dof-Velocity-HeightScan",
++    entry_point="isaaclab.envs:ManagerBasedRLEnv",
++    disable_env_checker=True,
++    kwargs={
++        "env_cfg_entry_point": f"{__name__}.velocity_env_cfg:RobotHeightScanEnvCfg",
++        "play_env_cfg_entry_point": f"{__name__}.velocity_env_cfg:RobotHeightScanPlayEnvCfg",
++        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
++    },
++)
++
++# ============================================================================
++# 阶段3: 盲爬楼梯（楼梯，无 height_scan）
++# ============================================================================
++gym.register(
++    id="Unitree-G1-29dof-Stair-Blind",
++    entry_point="isaaclab.envs:ManagerBasedRLEnv",
++    disable_env_checker=True,
++    kwargs={
++        "env_cfg_entry_point": f"{__name__}.stair_env_cfg:StairBlindEnvCfg",
++        "play_env_cfg_entry_point": f"{__name__}.stair_env_cfg:StairBlindPlayEnvCfg",
++        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
++    },
++)
++
++# ============================================================================
++# 阶段4: 带传感器爬楼梯（楼梯，有 height_scan）
++# ============================================================================
++gym.register(
++    id="Unitree-G1-29dof-Stair",
++    entry_point="isaaclab.envs:ManagerBasedRLEnv",
++    disable_env_checker=True,
++    kwargs={
++        "env_cfg_entry_point": f"{__name__}.stair_env_cfg:StairClimbEnvCfg",
++        "play_env_cfg_entry_point": f"{__name__}.stair_env_cfg:StairClimbPlayEnvCfg",
++        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
++    },
++)
++
++# ============================================================================
++#                       统一条件策略任务
++# ============================================================================
++# 一个策略同时学习4种模式，通过 mode_flag 控制行为
++# 部署时可智能切换模式，无需加载多个模型
++# ============================================================================
++gym.register(
++    id="Unitree-G1-29dof-Unified",
++    entry_point="isaaclab.envs:ManagerBasedRLEnv",
++    disable_env_checker=True,
++    kwargs={
++        "env_cfg_entry_point": f"{__name__}.unified_env_cfg:UnifiedEnvCfg",
++        "play_env_cfg_entry_point": f"{__name__}.unified_env_cfg:UnifiedPlayEnvCfg",
++        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
++    },
++)
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/velocity_env_cfg.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/velocity_env_cfg.py
+index 8bdd006..565dfcf 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/velocity_env_cfg.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/velocity_env_cfg.py
+@@ -50,8 +50,8 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
+     border_width=20.0,  # 地形边界宽度，防止机器人走出边界，单位：米
+     num_rows=9,  # 地形行数，用于课程学习的难度等级数量
+     num_cols=21,  # 地形列数，每个难度等级的地形变体数量
+-    horizontal_scale=0.1,  # 水平分辨率，高度图采样间隔，单位：米
+-    vertical_scale=0.005,  # 垂直分辨率，高度值缩放因子，单位：米
++    horizontal_scale=0.1,  # 水平分辨率，高度图采样间隔，单位：米   ？？
++    vertical_scale=0.005,  # 垂直分辨率，高度值缩放因子，单位：米  ？？
+     slope_threshold=0.75,  # 斜坡阈值，用于法线计算和可行走区域判定
+     difficulty_range=(0.0, 1.0),  # 难度范围 (最小难度, 最大难度)，用于课程学习
+     use_cache=False,  # 是否使用缓存地形，False表示每次重新生成
+@@ -76,14 +76,23 @@ class RobotSceneCfg(InteractiveSceneCfg):
+         - 传感器配置：高度扫描器、接触力传感器
+         - 灯光配置：天空穹顶灯光
+     """
+-
++    """
++    terrain  
++    
++    """
+     # ======================== 地形配置 ========================
+     terrain = TerrainImporterCfg(
++
+         prim_path="/World/ground",  # 地形在USD场景中的路径
++        
+         terrain_type="generator",  # 地形类型: "plane"(平面) 或 "generator"(程序生成)
++        
+         terrain_generator=COBBLESTONE_ROAD_CFG,  # 地形生成器配置，None表示使用默认平面
++        
+         max_init_terrain_level=COBBLESTONE_ROAD_CFG.num_rows - 1,  # 初始化时的最大地形难度等级
++        
+         collision_group=-1,  # 碰撞组ID，-1表示与所有物体碰撞
++        
+         # 物理材质配置：定义地形的摩擦和弹性特性
+         physics_material=sim_utils.RigidBodyMaterialCfg(
+             friction_combine_mode="multiply",  # 摩擦力组合模式：相乘
+@@ -91,12 +100,15 @@ class RobotSceneCfg(InteractiveSceneCfg):
+             static_friction=1.0,  # 静摩擦系数
+             dynamic_friction=1.0,  # 动摩擦系数
+         ),
++        
+         # 视觉材质配置：地形的外观纹理
+         visual_material=sim_utils.MdlFileCfg(
+             mdl_path=f"{ISAACLAB_NUCLEUS_DIR}/Materials/TilesMarbleSpiderWhiteBrickBondHoned/TilesMarbleSpiderWhiteBrickBondHoned.mdl",
++            #NVIDIA MDL 材质文件路径，这是一个白色大理石砖纹理
+             project_uvw=True,  # 使用投影UV映射
+             texture_scale=(0.25, 0.25),  # 纹理缩放比例
+         ),
++        
+         debug_vis=False,  # 是否显示调试可视化
+     )
+ 
+@@ -110,7 +122,7 @@ class RobotSceneCfg(InteractiveSceneCfg):
+     height_scanner = RayCasterCfg(
+         prim_path="{ENV_REGEX_NS}/Robot/torso_link",  # 传感器安装位置：躯干链接
+         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),  # 射线起点偏移，从高处向下投射
+-        ray_alignment="yaw",  # 射线对齐方式：跟随机器人偏航角
++        ray_alignment="yaw",  # 射线对齐方式：跟随机器人偏航角  什么
+         pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),  # 网格采样模式：分辨率0.1m，范围1.6mx1.0m
+         debug_vis=False,  # 是否显示射线调试可视化
+         mesh_prim_paths=["/World/ground"],  # 射线检测的目标网格路径
+@@ -766,7 +778,7 @@ class RobotEnvCfg(ManagerBasedRLEnvCfg):
+ class RobotPlayEnvCfg(RobotEnvCfg):
+     """
+     演示/测试环境配置类 - 用于策略评估和可视化
+-    
++
+     继承自RobotEnvCfg，但修改了部分参数使其更适合演示:
+         - 减少并行环境数量（便于可视化）
+         - 减少地形块数量（加快加载）
+@@ -790,3 +802,164 @@ class RobotPlayEnvCfg(RobotEnvCfg):
+         # 使用完整速度范围：测试策略的极限能力
+         # 将初始范围设置为limit_ranges，跳过课程学习的渐进过程
+         self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
++
++
++# ============================================================================
++#                  阶段2：带传感器行走（平地，有 height_scan）
++# ============================================================================
++@configclass
++class HeightScanSceneCfg(RobotSceneCfg):
++    """
++    带高度扫描的场景配置（阶段2）
++
++    与 RobotSceneCfg 相同，但修正 height_scanner 的 z 偏移
++    使其能够正确感知地形
++    """
++
++    # 高度扫描器：修正 z 偏移，使其能正确感知地形
++    height_scanner = RayCasterCfg(
++        prim_path="{ENV_REGEX_NS}/Robot/torso_link",
++        offset=RayCasterCfg.OffsetCfg(pos=(0.2, 0.0, 0.8)),  # 修正：从 20.0 改为 0.8
++        ray_alignment="yaw",
++        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
++        debug_vis=False,
++        mesh_prim_paths=["/World/ground"],
++    )
++
++
++@configclass
++class HeightScanObservationsCfg:
++    """
++    带高度扫描的观测配置（阶段2）
++
++    在原有观测基础上添加 height_scan 观测
++    """
++
++    @configclass
++    class PolicyCfg(ObsGroup):
++        """策略网络观测组 - 包含高度扫描"""
++
++        base_ang_vel = ObsTerm(
++            func=mdp.base_ang_vel,
++            scale=0.2,
++            noise=Unoise(n_min=-0.2, n_max=0.2),
++        )
++
++        projected_gravity = ObsTerm(
++            func=mdp.projected_gravity,
++            noise=Unoise(n_min=-0.05, n_max=0.05),
++        )
++
++        velocity_commands = ObsTerm(
++            func=mdp.generated_commands,
++            params={"command_name": "base_velocity"},
++        )
++
++        joint_pos_rel = ObsTerm(
++            func=mdp.joint_pos_rel,
++            noise=Unoise(n_min=-0.01, n_max=0.01),
++        )
++
++        joint_vel_rel = ObsTerm(
++            func=mdp.joint_vel_rel,
++            scale=0.05,
++            noise=Unoise(n_min=-1.5, n_max=1.5),
++        )
++
++        last_action = ObsTerm(func=mdp.last_action)
++
++        # 高度扫描 - 阶段2新增观测
++        height_scan = ObsTerm(
++            func=mdp.height_scan,
++            params={"sensor_cfg": SceneEntityCfg("height_scanner")},
++            noise=Unoise(n_min=-0.1, n_max=0.1),
++            clip=(-1.0, 1.0),
++        )
++
++        def __post_init__(self):
++            self.history_length = 5
++            self.enable_corruption = True
++            self.concatenate_terms = True
++
++    policy: PolicyCfg = PolicyCfg()
++
++    @configclass
++    class CriticCfg(ObsGroup):
++        """评论家网络观测组"""
++
++        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
++        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale=0.2)
++        projected_gravity = ObsTerm(func=mdp.projected_gravity)
++
++        velocity_commands = ObsTerm(
++            func=mdp.generated_commands,
++            params={"command_name": "base_velocity"},
++        )
++
++        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
++        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05)
++        last_action = ObsTerm(func=mdp.last_action)
++
++        # 评论家也使用高度扫描（无噪声）
++        height_scan = ObsTerm(
++            func=mdp.height_scan,
++            params={"sensor_cfg": SceneEntityCfg("height_scanner")},
++            clip=(-1.0, 1.0),
++        )
++
++        def __post_init__(self):
++            self.history_length = 5
++
++    critic: CriticCfg = CriticCfg()
++
++
++@configclass
++class RobotHeightScanEnvCfg(ManagerBasedRLEnvCfg):
++    """
++    带高度扫描的平地行走环境配置（阶段2）
++
++    在平地上训练机器人使用 height_scan 观测
++    为后续楼梯任务做准备
++    """
++
++    scene: HeightScanSceneCfg = HeightScanSceneCfg(num_envs=4096, env_spacing=2.5)
++    observations: HeightScanObservationsCfg = HeightScanObservationsCfg()
++    actions: ActionsCfg = ActionsCfg()
++    commands: CommandsCfg = CommandsCfg()
++    rewards: RewardsCfg = RewardsCfg()
++    terminations: TerminationsCfg = TerminationsCfg()
++    events: EventCfg = EventCfg()
++    curriculum: CurriculumCfg = CurriculumCfg()
++
++    def __post_init__(self):
++        self.decimation = 4
++        self.episode_length_s = 20.0
++
++        self.sim.dt = 0.005
++        self.sim.render_interval = self.decimation
++        self.sim.physics_material = self.scene.terrain.physics_material
++        self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
++
++        self.scene.contact_forces.update_period = self.sim.dt
++        self.scene.height_scanner.update_period = self.decimation * self.sim.dt
++
++        if getattr(self.curriculum, "terrain_levels", None) is not None:
++            if self.scene.terrain.terrain_generator is not None:
++                self.scene.terrain.terrain_generator.curriculum = True
++        else:
++            if self.scene.terrain.terrain_generator is not None:
++                self.scene.terrain.terrain_generator.curriculum = False
++
++
++@configclass
++class RobotHeightScanPlayEnvCfg(RobotHeightScanEnvCfg):
++    """带高度扫描的平地行走演示环境配置"""
++
++    def __post_init__(self):
++        super().__post_init__()
++
++        self.scene.num_envs = 32
++        self.scene.terrain.terrain_generator.num_rows = 2
++        self.scene.terrain.terrain_generator.num_cols = 10
++
++        self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges

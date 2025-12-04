@@ -1,0 +1,281 @@
+--- git status ---
+On branch main
+Your branch is ahead of 'origin/main' by 1 commit.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/rewards.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/__init__.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/velocity_env_cfg.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/stair_env_cfg.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/rewards.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/rewards.py
+index 95ddd8a..f347ebb 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/rewards.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/rewards.py
+@@ -9,7 +9,7 @@ except ImportError:
+     from isaaclab.utils.math import quat_rotate_inverse as quat_apply_inverse
+ from isaaclab.assets import Articulation, RigidObject
+ from isaaclab.managers import SceneEntityCfg
+-from isaaclab.sensors import ContactSensor
++from isaaclab.sensors import ContactSensor, RayCaster
+ 
+ if TYPE_CHECKING:
+     from isaaclab.envs import ManagerBasedRLEnv
+@@ -223,3 +223,151 @@ def joint_mirror(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirror_joint
+         )
+     reward *= 1 / len(mirror_joints) if len(mirror_joints) > 0 else 0
+     return reward
++
++
++"""
++Stair climbing rewards.
++楼梯攀爬专用奖励函数
++"""
++
++
++def upward_progress(
++    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
++) -> torch.Tensor:
++    """
++    向上进展奖励：鼓励机器人向上攀爬楼梯
++
++    计算每步的高度增量，对正向增量给予奖励。
++    使用累计高度差避免"跳起来再落回去"骗奖励的情况。
++
++    Args:
++        env: 环境实例
++        asset_cfg: 机器人资产配置
++
++    Returns:
++        奖励张量，形状为 (num_envs,)
++    """
++    asset: RigidObject = env.scene[asset_cfg.name]
++
++    # 获取当前基座高度
++    current_height = asset.data.root_pos_w[:, 2]
++
++    # 初始化或获取上一步高度
++    if not hasattr(env, "_prev_base_height"):
++        env._prev_base_height = current_height.clone()
++        env._initial_height = current_height.clone()
++
++    # 形状不一致时进行重置（例如环境数量变化时）
++    if env._prev_base_height.shape != current_height.shape:
++        env._prev_base_height = current_height.clone()
++    if env._initial_height.shape != current_height.shape:
++        env._initial_height = current_height.clone()
++
++    # 按回合重置缓存，避免跨回合累计
++    if hasattr(env, "reset_buf"):
++        reset_mask = env.reset_buf > 0
++        if torch.any(reset_mask):
++            env._prev_base_height = torch.where(reset_mask, current_height, env._prev_base_height)
++            env._initial_height = torch.where(reset_mask, current_height, env._initial_height)
++
++    # 计算高度增量
++    height_delta = current_height - env._prev_base_height
++
++    # 更新上一步高度
++    env._prev_base_height = current_height.clone()
++
++    # 对正向高度增量给予奖励，负向增量给予较小惩罚
++    # 使用 clamp 避免过大的奖励/惩罚
++    reward = torch.clamp(height_delta, -0.1, 0.2)
++
++    # 额外奖励：相对于初始高度的总进展
++    total_progress = current_height - env._initial_height
++    progress_bonus = torch.clamp(total_progress * 0.1, 0, 0.5)
++
++    return reward + progress_bonus
++
++
++def base_height_adaptive(
++    env: ManagerBasedRLEnv,
++    target_height: float,
++    sensor_cfg: SceneEntityCfg,
++    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
++) -> torch.Tensor:
++    """
++    自适应基座高度惩罚：相对于脚下地形的高度
++
++    使用 RayCaster 获取脚下地形高度，计算相对高度偏差。
++    这样在楼梯上爬升时不会被错误惩罚。
++
++    Args:
++        env: 环境实例
++        target_height: 目标相对高度（机器人基座相对于地形的高度）
++        sensor_cfg: 高度扫描器配置
++        asset_cfg: 机器人资产配置
++
++    Returns:
++        惩罚张量，形状为 (num_envs,)
++    """
++    asset: RigidObject = env.scene[asset_cfg.name]
++    sensor: RayCaster = env.scene.sensors[sensor_cfg.name]
++
++    # 获取机器人基座世界高度
++    base_height_world = asset.data.root_pos_w[:, 2]
++
++    # 从高度扫描器获取脚下地形高度
++    # RayCaster 的 ray_hits_w 包含射线击中点的世界坐标
++    # 取中心区域的射线作为脚下地形高度估计
++    ray_hits = sensor.data.ray_hits_w
++
++    # 获取射线模式的尺寸信息
++    num_rays = ray_hits.shape[1]
++
++    # 取中心区域的射线（假设网格中心对应机器人正下方）
++    center_idx = num_rays // 2
++    # 取中心附近几条射线的平均值
++    start_idx = max(0, center_idx - 5)
++    end_idx = min(num_rays, center_idx + 5)
++
++    terrain_height = ray_hits[:, start_idx:end_idx, 2].mean(dim=1)
++
++    # 计算相对高度
++    relative_height = base_height_world - terrain_height
++
++    # 计算与目标高度的偏差
++    height_error = torch.square(relative_height - target_height)
++
++    return height_error
++
++
++def stair_forward_progress(
++    env: ManagerBasedRLEnv,
++    stair_direction: list[float] = [1.0, 0.0],
++    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
++) -> torch.Tensor:
++    """
++    沿楼梯方向的前进奖励
++
++    Args:
++        env: 环境实例
++        stair_direction: 楼梯方向单位向量 [x, y]
++        asset_cfg: 机器人资产配置
++
++    Returns:
++        奖励张量，形状为 (num_envs,)
++    """
++    asset: RigidObject = env.scene[asset_cfg.name]
++
++    # 获取机器人在世界坐标系下的线速度
++    lin_vel = asset.data.root_lin_vel_w[:, :2]
++
++    # 楼梯方向向量
++    stair_dir = torch.tensor(stair_direction, device=env.device)
++    stair_dir = stair_dir / torch.norm(stair_dir)
++
++    # 计算沿楼梯方向的速度分量
++    forward_vel = torch.sum(lin_vel * stair_dir, dim=1)
++
++    # 对正向速度给予奖励
++    reward = torch.clamp(forward_vel, 0, 1.0)
++
++    return reward
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/__init__.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/__init__.py
+index e67a144..2367f1a 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/__init__.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/__init__.py
+@@ -1,5 +1,8 @@
+ import gymnasium as gym
+ 
++# ============================================================================
++# 速度跟踪任务（原有任务）
++# ============================================================================
+ gym.register(
+     id="Unitree-G1-29dof-Velocity",
+     entry_point="isaaclab.envs:ManagerBasedRLEnv",
+@@ -10,3 +13,17 @@ gym.register(
+         "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
+     },
+ )
++
++# ============================================================================
++# 楼梯攀爬任务（新增任务）
++# ============================================================================
++gym.register(
++    id="Unitree-G1-29dof-Stair",
++    entry_point="isaaclab.envs:ManagerBasedRLEnv",
++    disable_env_checker=True,
++    kwargs={
++        "env_cfg_entry_point": f"{__name__}.stair_env_cfg:StairClimbEnvCfg",
++        "play_env_cfg_entry_point": f"{__name__}.stair_env_cfg:StairClimbPlayEnvCfg",
++        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
++    },
++)
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/velocity_env_cfg.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/velocity_env_cfg.py
+index 8bdd006..8d9648f 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/velocity_env_cfg.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/velocity_env_cfg.py
+@@ -50,8 +50,8 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
+     border_width=20.0,  # 地形边界宽度，防止机器人走出边界，单位：米
+     num_rows=9,  # 地形行数，用于课程学习的难度等级数量
+     num_cols=21,  # 地形列数，每个难度等级的地形变体数量
+-    horizontal_scale=0.1,  # 水平分辨率，高度图采样间隔，单位：米
+-    vertical_scale=0.005,  # 垂直分辨率，高度值缩放因子，单位：米
++    horizontal_scale=0.1,  # 水平分辨率，高度图采样间隔，单位：米   ？？
++    vertical_scale=0.005,  # 垂直分辨率，高度值缩放因子，单位：米  ？？
+     slope_threshold=0.75,  # 斜坡阈值，用于法线计算和可行走区域判定
+     difficulty_range=(0.0, 1.0),  # 难度范围 (最小难度, 最大难度)，用于课程学习
+     use_cache=False,  # 是否使用缓存地形，False表示每次重新生成
+@@ -76,14 +76,23 @@ class RobotSceneCfg(InteractiveSceneCfg):
+         - 传感器配置：高度扫描器、接触力传感器
+         - 灯光配置：天空穹顶灯光
+     """
+-
++    """
++    terrain  
++    
++    """
+     # ======================== 地形配置 ========================
+     terrain = TerrainImporterCfg(
++
+         prim_path="/World/ground",  # 地形在USD场景中的路径
++        
+         terrain_type="generator",  # 地形类型: "plane"(平面) 或 "generator"(程序生成)
++        
+         terrain_generator=COBBLESTONE_ROAD_CFG,  # 地形生成器配置，None表示使用默认平面
++        
+         max_init_terrain_level=COBBLESTONE_ROAD_CFG.num_rows - 1,  # 初始化时的最大地形难度等级
++        
+         collision_group=-1,  # 碰撞组ID，-1表示与所有物体碰撞
++        
+         # 物理材质配置：定义地形的摩擦和弹性特性
+         physics_material=sim_utils.RigidBodyMaterialCfg(
+             friction_combine_mode="multiply",  # 摩擦力组合模式：相乘
+@@ -91,12 +100,15 @@ class RobotSceneCfg(InteractiveSceneCfg):
+             static_friction=1.0,  # 静摩擦系数
+             dynamic_friction=1.0,  # 动摩擦系数
+         ),
++        
+         # 视觉材质配置：地形的外观纹理
+         visual_material=sim_utils.MdlFileCfg(
+             mdl_path=f"{ISAACLAB_NUCLEUS_DIR}/Materials/TilesMarbleSpiderWhiteBrickBondHoned/TilesMarbleSpiderWhiteBrickBondHoned.mdl",
++            #NVIDIA MDL 材质文件路径，这是一个白色大理石砖纹理
+             project_uvw=True,  # 使用投影UV映射
+             texture_scale=(0.25, 0.25),  # 纹理缩放比例
+         ),
++        
+         debug_vis=False,  # 是否显示调试可视化
+     )
+ 
+@@ -110,7 +122,7 @@ class RobotSceneCfg(InteractiveSceneCfg):
+     height_scanner = RayCasterCfg(
+         prim_path="{ENV_REGEX_NS}/Robot/torso_link",  # 传感器安装位置：躯干链接
+         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),  # 射线起点偏移，从高处向下投射
+-        ray_alignment="yaw",  # 射线对齐方式：跟随机器人偏航角
++        ray_alignment="yaw",  # 射线对齐方式：跟随机器人偏航角  什么
+         pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),  # 网格采样模式：分辨率0.1m，范围1.6mx1.0m
+         debug_vis=False,  # 是否显示射线调试可视化
+         mesh_prim_paths=["/World/ground"],  # 射线检测的目标网格路径

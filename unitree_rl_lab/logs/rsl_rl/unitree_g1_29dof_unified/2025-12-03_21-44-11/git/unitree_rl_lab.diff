@@ -1,0 +1,2369 @@
+--- git status ---
+On branch main
+Your branch is ahead of 'origin/main' by 1 commit.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   scripts/list_envs.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/assets/robots/unitree.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/assets/robots/unitree_actuators.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/__init__.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/agents/rsl_rl_ppo_cfg.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/__init__.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/commands/__init__.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/commands/velocity_command.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/curriculums.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/observations.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/rewards.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/__init__.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/__init__.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/velocity_env_cfg.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/__init__.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/go2/__init__.py
+	modified:   source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/h1/__init__.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/events.py
+	source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/stair_env_cfg.py
+	source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/unified_env_cfg.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/scripts/list_envs.py b/scripts/list_envs.py
+index 5324af9..fa65b07 100644
+--- a/scripts/list_envs.py
++++ b/scripts/list_envs.py
+@@ -1,14 +1,13 @@
+ """
+-Script to print all the available environments in Isaac Lab.
++脚本用于打印 Isaac Lab 中所有可用的环境。
+ 
+-The script iterates over all registered environments and stores the details in a table.
+-It prints the name of the environment, the entry point and the config file.
++该脚本遍历所有已注册的环境并将详细信息存储在表格中。
++它会打印环境名称、入口点和配置文件。
+ 
+-All the environments are registered in the `unitree_rl_lab` extension. They start
+-with `Unitree` in their name.
++所有环境都在 `unitree_rl_lab` 扩展中注册。它们的名称以 `Unitree` 开头。
+ """
+ 
+-"""Launch Isaac Sim Simulator first."""
++"""首先启动 Isaac Sim 仿真器。"""
+ 
+ 
+ import importlib
+@@ -22,11 +21,11 @@ def _walk_packages(
+     prefix: str = "",
+     onerror=None,
+ ):
+-    """Yields ModuleInfo for all modules recursively on path, or, if path is None, all accessible modules.
++    """递归地生成路径上的所有模块信息，如果路径为 None，则生成所有可访问的模块信息。
+ 
+-    Note:
+-        This function is a modified version of the original ``pkgutil.walk_packages`` function. Please refer to the original
+-        ``pkgutil.walk_packages`` function for more details.
++    注意：
++        此函数是原始 ``pkgutil.walk_packages`` 函数的修改版本。
++        更多详细信息请参考原始 ``pkgutil.walk_packages`` 函数。
+     """
+ 
+     def seen(p, m={}):
+@@ -34,11 +33,13 @@ def _walk_packages(
+             return True
+         m[p] = True  # noqa: R503
+ 
++    # 遍历指定路径下的模块
+     for info in pkgutil.iter_modules(path, prefix):
+ 
+-        # yield the module info
++        # 生成模块信息
+         yield info
+ 
++        # 如果是包，则递归遍历
+         if info.ispkg:
+             try:
+                 __import__(info.name)
+@@ -50,55 +51,65 @@ def _walk_packages(
+             else:
+                 path = getattr(sys.modules[info.name], "__path__", None) or []
+ 
+-                # don't traverse path items we've seen before
++                # 不要遍历之前已经见过的路径项
+                 path = [p for p in path if not seen(p)]
+ 
++                # 递归调用
+                 yield from _walk_packages(path, info.name + ".", onerror)
+ 
+ 
+ def import_packages():
++    """导入必要的包以注册环境。"""
++    # 将任务目录添加到系统路径中，以便可以导入其中的模块
+     sys.path.insert(0, f"{pathlib.Path(__file__).parent.parent}/source/unitree_rl_lab/unitree_rl_lab/tasks/")
++    # 遍历并导入 locomotion 和 mimic 机器人相关的包
+     for package in ["locomotion.robots", "mimic.robots"]:
+         package = importlib.import_module(package)
++        # 递归遍历包中的所有模块并导入，这会触发环境的注册
+         for _ in _walk_packages(package.__path__, package.__name__ + "."):
+             pass
++    # 从系统路径中移除添加的目录
+     sys.path.pop(0)
+ 
+ 
++# 执行导入操作，确保所有环境都被注册
+ import_packages()
+ 
+-"""Rest everything follows."""
++"""其余部分紧随其后。"""
+ 
+ import gymnasium as gym
+ from prettytable import PrettyTable
+ 
+ 
+ def main():
+-    """Print all environments registered in `unitree_rl_lab` extension."""
+-    # print all the available environments
++    """打印所有在 `unitree_rl_lab` 扩展中注册的环境。"""
++    # 创建一个表格用于显示环境信息
+     table = PrettyTable(["S. No.", "Task Name", "Entry Point", "Config"])
+-    table.title = "Available Environments in Unitree RL Lab"
+-    # set alignment of table columns
+-    table.align["Task Name"] = "l"
+-    table.align["Entry Point"] = "l"
+-    table.align["Config"] = "l"
++    table.title = "Available Environments in Unitree RL Lab" # 表格标题：Unitree RL Lab 中可用的环境
++    # 设置表格列的对齐方式
++    table.align["Task Name"] = "l"   # 任务名称左对齐
++    table.align["Entry Point"] = "l" # 入口点左对齐
++    table.align["Config"] = "l"      # 配置文件左对齐
+ 
+-    # count of environments
++    # 环境计数器
+     index = 0
+-    # acquire all Isaac environments names
++    # 获取所有 Isaac 环境名称
+     for task_spec in gym.registry.values():
++        # 筛选出包含 "Unitree" 且不包含 "Isaac" 的任务（即 Unitree 扩展提供的任务）
+         if "Unitree" in task_spec.id and "Isaac" not in task_spec.id:
+-            # add details to table
++            # 将环境详细信息添加到表格中
++            # 包含：序号、任务ID、入口点函数、配置文件入口点
+             table.add_row([index + 1, task_spec.id, task_spec.entry_point, task_spec.kwargs["env_cfg_entry_point"]])
+-            # increment count
++            # 增加计数
+             index += 1
+ 
++    # 打印表格
+     print(table)
+ 
+ 
+ if __name__ == "__main__":
+     try:
+-        # run the main function
++        # 运行主函数
+         main()
+     except Exception as e:
+         raise e
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/assets/robots/unitree.py b/source/unitree_rl_lab/unitree_rl_lab/assets/robots/unitree.py
+index 110e95e..10c31f7 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/assets/robots/unitree.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/assets/robots/unitree.py
+@@ -3,9 +3,23 @@
+ #
+ # SPDX-License-Identifier: BSD-3-Clause
+ 
+-"""Configuration for Unitree robots.
+-
+-Reference: https://github.com/unitreerobotics/unitree_ros
++"""Unitree 机器人配置文件
++
++本模块定义了所有 Unitree 机器人的物理模型配置，包括：
++- Go2/Go2W: 四足机器人
++- B2: 重型四足机器人
++- H1: 人形机器人（20自由度）
++- G1-23DOF: 简化版人形机器人（23自由度）
++- G1-29DOF: 完整版人形机器人（29自由度）
++- G1-29DOF-MIMIC: 模仿学习专用配置
++
++主要功能：
++1. 定义机器人的初始状态（位置、关节角度）
++2. 配置执行器参数（刚度、阻尼、扭矩限制）
++3. 设置物理属性（自碰撞、求解器参数）
++4. 提供 SDK 关节名称映射（用于实体机器人部署）
++
++参考: https://github.com/unitreerobotics/unitree_ros
+ """
+ 
+ import os
+@@ -17,66 +31,166 @@ from isaaclab.utils import configclass
+ 
+ from unitree_rl_lab.assets.robots import unitree_actuators
+ 
+-UNITREE_MODEL_DIR = "E:/Aunitree/unitree_model"  # Replace with the actual path to your unitree_model directory
+-UNITREE_ROS_DIR = "E:/Aunitree/unitree_ros"  # Replace with the actual path to your unitree_ros package
++# ============================================================================
++#                           路径配置
++# ============================================================================
++
++UNITREE_MODEL_DIR = "E:/Aunitree/unitree_model"  # USD 模型文件目录（Omniverse 原生格式）
++UNITREE_ROS_DIR = "E:/Aunitree/unitree_ros"      # URDF 模型文件目录（ROS 标准格式）
++
++# 注意：请根据实际安装路径修改上述目录
+ 
+ 
++# ============================================================================
++#                           基础配置类
++# ============================================================================
++
+ @configclass
+ class UnitreeArticulationCfg(ArticulationCfg):
+-    """Configuration for Unitree articulations."""
++    """Unitree 关节机器人配置基类
++    
++    扩展了 Isaac Lab 的 ArticulationCfg，添加 Unitree 特有的配置项：
++    - joint_sdk_names: SDK 关节名称映射（用于实体机器人通信）
++    - soft_joint_pos_limit_factor: 软关节限制因子
++    """
+ 
+     joint_sdk_names: list[str] = None
++    """SDK 关节名称列表
++    
++    用于将仿真中的关节映射到实体机器人的 SDK 接口
++    顺序必须与 Unitree SDK 的关节索引一致
++    示例: ["left_hip_pitch_joint", "left_hip_roll_joint", ...]
++    """
+ 
+     soft_joint_pos_limit_factor = 0.9
++    """软关节位置限制因子
++    
++    实际限制 = 硬限制 * soft_joint_pos_limit_factor
++    默认 0.9 表示使用硬限制的 90%，留 10% 安全余量
++    这样可以避免机器人碰到机械限位
++    """
+ 
+ 
+ @configclass
+ class UnitreeUsdFileCfg(sim_utils.UsdFileCfg):
++    """Unitree USD 模型加载配置
++    
++    USD (Universal Scene Description) 是 Omniverse 的原生格式
++    优点：
++    - 渲染性能好
++    - 物理仿真精确
++    - 支持 GPU 加速
++    
++    适用于：高保真度仿真训练
++    """
++    
+     activate_contact_sensors: bool = True
++    """激活接触传感器
++    
++    用于检测机器人与环境的接触力，是计算接触奖励的基础
++    """
++    
+     rigid_props = sim_utils.RigidBodyPropertiesCfg(
+-        disable_gravity=False,
+-        retain_accelerations=False,
+-        linear_damping=0.0,
+-        angular_damping=0.0,
+-        max_linear_velocity=1000.0,
+-        max_angular_velocity=1000.0,
+-        max_depenetration_velocity=1.0,
++        disable_gravity=False,              # 启用重力
++        retain_accelerations=False,         # 不保留加速度历史（节省内存）
++        linear_damping=0.0,                 # 线性阻尼（0表示无空气阻力）
++        angular_damping=0.0,                # 角阻尼
++        max_linear_velocity=1000.0,         # 最大线速度 (m/s)，防止数值爆炸
++        max_angular_velocity=1000.0,        # 最大角速度 (rad/s)
++        max_depenetration_velocity=1.0,     # 最大去穿透速度，防止碰撞抖动
+     )
++    """刚体物理属性配置"""
++    
+     articulation_props = sim_utils.ArticulationRootPropertiesCfg(
+-        enabled_self_collisions=True, solver_position_iteration_count=8, solver_velocity_iteration_count=4
++        enabled_self_collisions=True,          # 启用自碰撞检测（如腿与腿）
++        solver_position_iteration_count=8,     # 位置求解器迭代次数（影响精度）
++        solver_velocity_iteration_count=4      # 速度求解器迭代次数
+     )
++    """关节机器人根属性配置
++    
++    更多迭代次数 = 更高精度 + 更多计算时间
++    当前设置在精度和性能间取得平衡
++    """
+ 
+ 
+ @configclass
+ class UnitreeUrdfFileCfg(sim_utils.UrdfFileCfg):
++    """Unitree URDF 模型加载配置
++    
++    URDF (Unified Robot Description Format) 是 ROS 的标准格式
++    优点：
++    - 易于编辑和修改
++    - 与 ROS 生态兼容
++    - 文本格式，便于版本控制
++    
++    适用于：快速原型开发、ROS 集成
++    """
++    
+     fix_base: bool = False
++    """是否固定基座
++    
++    False: 机器人可以自由移动（正常模式）
++    True: 机器人基座固定在空中（调试模式）
++    """
++    
+     activate_contact_sensors: bool = True
++    """激活接触传感器"""
++    
+     replace_cylinders_with_capsules = True
++    """用胶囊体替换圆柱体
++    
++    胶囊体碰撞检测更快更稳定
++    适合机器人腿部等细长结构
++    """
++    
+     joint_drive = sim_utils.UrdfConverterCfg.JointDriveCfg(
+-        gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0, damping=0)
++        gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(
++            stiffness=0,  # 刚度设为0，表示不使用 URDF 内置的驱动
++            damping=0     # 阻尼设为0，我们将使用自定义的执行器模型
++        )
+     )
++    """关节驱动配置
++    
++    设为0表示禁用 URDF 的内置驱动，改用 Isaac Lab 的执行器模型
++    这样可以使用更精确的 Unitree 执行器物理模型
++    """
++    
+     articulation_props = sim_utils.ArticulationRootPropertiesCfg(
+-        enabled_self_collisions=True,
+-        solver_position_iteration_count=8,
+-        solver_velocity_iteration_count=4,
++        enabled_self_collisions=True,          # 启用自碰撞
++        solver_position_iteration_count=8,     # 位置求解器迭代8次
++        solver_velocity_iteration_count=4,     # 速度求解器迭代4次
+     )
++    """关节机器人属性（同USD配置）"""
++    
+     rigid_props = sim_utils.RigidBodyPropertiesCfg(
+-        disable_gravity=False,
+-        retain_accelerations=False,
+-        linear_damping=0.0,
+-        angular_damping=0.0,
+-        max_linear_velocity=1000.0,
+-        max_angular_velocity=1000.0,
+-        max_depenetration_velocity=1.0,
++        disable_gravity=False,              # 启用重力
++        retain_accelerations=False,         # 不保留加速度
++        linear_damping=0.0,                 # 无线性阻尼
++        angular_damping=0.0,                # 无角阻尼
++        max_linear_velocity=1000.0,         # 最大线速度限制
++        max_angular_velocity=1000.0,        # 最大角速度限制
++        max_depenetration_velocity=1.0,     # 去穿透速度限制
+     )
++    """刚体物理属性（同USD配置）"""
+ 
+     def replace_asset(self, meshes_dir, urdf_path):
+-        """Replace the asset with a temporary copy to avoid modifying the original asset.
+-
+-        When need to change the collisions, place the modified URDF file separately in this repository,
+-        and let `meshes_dir` be provided by `unitree_ros`.
+-        This function will auto construct a complete `robot_description` file structure in the `/tmp` directory.
+-        Note: The mesh references inside the URDF should be in the same directory level as the URDF itself.
++        """替换资产文件，使用临时副本避免修改原始文件
++        
++        使用场景：
++        当需要修改碰撞体时，将修改后的 URDF 文件单独放置，
++        mesh 目录仍使用 unitree_ros 提供的原始 mesh。
++        
++        工作原理：
++        1. 在 /tmp 目录创建临时的 robot_description 结构
++        2. 使用符号链接链接到实际的 mesh 目录
++        3. 使用符号链接链接到修改后的 URDF 文件
++        
++        注意：
++        URDF 内部的 mesh 引用路径应该与 URDF 文件在同一目录层级
++        
++        Args:
++            meshes_dir: mesh 文件目录（通常来自 unitree_ros）
++            urdf_path: 修改后的 URDF 文件路径
+         """
+         tmp_meshes_dir = "/tmp/IsaacLab/unitree_rl_lab/meshes"
+         if os.path.exists(tmp_meshes_dir):
+@@ -90,40 +204,64 @@ class UnitreeUrdfFileCfg(sim_utils.UrdfFileCfg):
+         os.symlink(urdf_path, self.asset_path)
+ 
+ 
+-""" Configuration for the Unitree robots."""
++# ============================================================================
++#                           Unitree 机器人配置
++# ============================================================================
++# 以下定义了所有 Unitree 机器人型号的详细配置
++# 每个配置包括：
++# 1. 模型加载方式（USD 或 URDF）
++# 2. 初始状态（位置、关节角度）
++# 3. 执行器配置（扭矩、速度限制、PD参数）
++# 4. SDK 关节名称映射
++# ============================================================================
+ 
++# ========== Go2 四足机器人 ==========
+ UNITREE_GO2_CFG = UnitreeArticulationCfg(
++    # 模型加载方式：使用 USD 格式（更好的渲染性能）
++    # 也可以使用 URDF 格式（注释掉的部分）
+     # spawn=UnitreeUrdfFileCfg(
+     #     asset_path=f"{UNITREE_ROS_DIR}/robots/go2_description/urdf/go2_description.urdf",
+     # ),
+     spawn=UnitreeUsdFileCfg(
+         usd_path=f"{UNITREE_MODEL_DIR}/Go2/usd/go2.usd",
+     ),
++    
++    # 初始状态配置
+     init_state=ArticulationCfg.InitialStateCfg(
+-        pos=(0.0, 0.0, 0.4),
++        pos=(0.0, 0.0, 0.4),  # 初始位置: (前x, 前y, 高度0.4m)
+         joint_pos={
+-            ".*R_hip_joint": -0.1,
+-            ".*L_hip_joint": 0.1,
+-            "F[L,R]_thigh_joint": 0.8,
+-            "R[L,R]_thigh_joint": 1.0,
+-            ".*_calf_joint": -1.5,
++            # 髋关节：左右分开
++            ".*R_hip_joint": -0.1,  # 右侧髋关节: -0.1 rad
++            ".*L_hip_joint": 0.1,   # 左侧髋关节: 0.1 rad
++            # 大腿关节：前腿和后腿角度不同
++            "F[L,R]_thigh_joint": 0.8,   # 前腿: 0.8 rad
++            "R[L,R]_thigh_joint": 1.0,   # 后腿: 1.0 rad (更大弯曲)
++            # 小腿关节：所有腿统一
++            ".*_calf_joint": -1.5,       # 小腿: -1.5 rad (向后弯曲)
+         },
+-        joint_vel={".*": 0.0},
++        joint_vel={".*": 0.0},  # 所有关节初始速度为0
+     ),
++    
++    # 执行器配置：所有关节使用相同的 Go2HV 执行器
+     actuators={
+         "GO2HV": unitree_actuators.UnitreeActuatorCfg_Go2HV(
+-            joint_names_expr=[".*"],
+-            stiffness=25.0,
+-            damping=0.5,
+-            friction=0.01,
++            joint_names_expr=[".*"],  # 匹配所有关节
++            stiffness=25.0,            # PD 控制器刚度: 25 N·m/rad
++            damping=0.5,               # PD 控制器阻尼: 0.5 N·m·s/rad
++            friction=0.01,             # 关节摩擦: 0.01 N·m
+         ),
+     },
++    
++    # SDK 关节名称映射（用于实体机器人通信）
++    # 顺序：FR(前右) -> FL(前左) -> RR(后右) -> RL(后左)
++    # 每条腿 3 个关节: hip(髋) -> thigh(大腿) -> calf(小腿)
++    # 总计 12 DOF
+     # fmt: off
+     joint_sdk_names=[
+-        "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
+-        "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
+-        "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
+-        "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint"
++        "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",  # 前右腿
++        "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",  # 前左腿
++        "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",  # 后右腿
++        "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint"   # 后左腿
+     ],
+     # fmt: on
+ )
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/assets/robots/unitree_actuators.py b/source/unitree_rl_lab/unitree_rl_lab/assets/robots/unitree_actuators.py
+index efe781d..82bf161 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/assets/robots/unitree_actuators.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/assets/robots/unitree_actuators.py
+@@ -1,3 +1,12 @@
++"""Unitree 执行器物理模型
++
++本模块实现了 Unitree 机器人执行器的真实物理特性，包括：
++- 扭矩-速度曲线建模
++- 摩擦力模型（静摩擦 + 动摩擦）
++- 电机惯量计算
++- 各型号执行器的预定义配置
++"""
++
+ from __future__ import annotations
+ 
+ import torch
+@@ -9,63 +18,114 @@ from isaaclab.utils.types import ArticulationActions
+ 
+ 
+ class UnitreeActuator(DelayedPDActuator):
+-    """Unitree actuator class that implements a torque-speed curve for the actuators.
++    """Unitree 执行器类 - 实现真实的扭矩-速度曲线
+ 
+-    The torque-speed curve is defined as follows:
++    扭矩-速度特性曲线定义如下：
+ 
+-            Torque Limit, N·m
++            扭矩限制 (N·m)
+                 ^
+-    Y2──────────|
+-                |──────────────Y1
++    Y2──────────|              (反向扭矩：制动时)
++                |──────────────Y1  (同向扭矩：加速时)
+                 |              │\
+-                |              │ \
++                |              │ \  (线性衰减区)
+                 |              │  \
+                 |              |   \
+-    ------------+--------------|------> velocity: rad/s
++    ------------+--------------|------> 速度 (rad/s)
+                               X1   X2
+ 
+-    - Y1: Peak Torque Test (Torque and Speed in the Same Direction)
+-    - Y2: Peak Torque Test (Torque and Speed in the Opposite Direction)
+-    - X1: Maximum Speed at Full Torque (T-N Curve Knee Point)
+-    - X2: No-Load Speed Test
+-
+-    - Fs: Static friction coefficient
+-    - Fd: Dynamic friction coefficient
+-    - Va: Velocity at which the friction is fully activated
++    参数说明:
++    - Y1: 同向峰值扭矩（扭矩与速度方向相同，电机加速）
++    - Y2: 反向峰值扭矩（扭矩与速度方向相反，电机制动，通常 Y2 > Y1）
++    - X1: 全扭矩最大速度（T-N 曲线拐点，超过此速度扭矩开始下降）
++    - X2: 空载最大速度（电机无负载时的理论最大速度）
++
++    摩擦模型参数:
++    - Fs: 静摩擦系数（低速时的摩擦力）
++    - Fd: 动摩擦系数（速度相关的摩擦力）
++    - Va: 摩擦激活速度（静摩擦完全激活的速度阈值）
++    
++    物理意义:
++    这个模型比简单的 PD 控制更接近真实电机特性，考虑了：
++    1. 电机在不同速度下的扭矩限制
++    2. 加速和制动时的不对称性
++    3. 真实的摩擦损耗
+     """
+ 
+-    cfg: UnitreeActuatorCfg
++    cfg: UnitreeActuatorCfg  # 执行器配置
+ 
+     armature: torch.Tensor
+-    """The armature of the actuator joints. Shape is (num_envs, num_joints).
+-        armature = J2 + J1 * i2 ^ 2 + Jr * (i1 * i2) ^ 2
++    """执行器关节的电枢惯量 (Armature Inertia)
++    
++    形状: (num_envs, num_joints)
++    
++    物理公式:
++        armature = J_rotor + J_gear1 * i1² + J_gear2 * (i1 * i2)²
++    
++    其中:
++        - J_rotor: 转子惯量
++        - J_gear1, J_gear2: 各级齿轮惯量
++        - i1, i2: 各级减速比
++    
++    电枢惯量影响:
++        - 响应速度：惯量越大，响应越慢
++        - 能量消耗：惯量越大，加速时能耗越高
++        - 稳定性：适当的惯量有助于系统稳定
+     """
+ 
+     def __init__(self, cfg: UnitreeActuatorCfg, *args, **kwargs):
++        """初始化 Unitree 执行器
++        
++        解析配置参数并初始化扭矩-速度曲线的各个关键点
++        """
+         super().__init__(cfg, *args, **kwargs)
+ 
++        # 保存当前关节速度（用于判断速度方向）
+         self._joint_vel = torch.zeros_like(self.computed_effort)
+-        self._effort_y1 = self._parse_joint_parameter(cfg.Y1, 1e9)
+-        self._effort_y2 = self._parse_joint_parameter(cfg.Y2, cfg.Y1)
+-        self._velocity_x1 = self._parse_joint_parameter(cfg.X1, 1e9)
+-        self._velocity_x2 = self._parse_joint_parameter(cfg.X2, 1e9)
+-        self._friction_static = self._parse_joint_parameter(cfg.Fs, 0.0)
+-        self._friction_dynamic = self._parse_joint_parameter(cfg.Fd, 0.0)
+-        self._activation_vel = self._parse_joint_parameter(cfg.Va, 0.01)
++        
++        # 解析扭矩-速度曲线参数
++        self._effort_y1 = self._parse_joint_parameter(cfg.Y1, 1e9)        # 同向峰值扭矩
++        self._effort_y2 = self._parse_joint_parameter(cfg.Y2, cfg.Y1)    # 反向峰值扭矩（默认等于Y1）
++        self._velocity_x1 = self._parse_joint_parameter(cfg.X1, 1e9)     # 全扭矩最大速度
++        self._velocity_x2 = self._parse_joint_parameter(cfg.X2, 1e9)     # 空载最大速度
++        
++        # 解析摩擦模型参数
++        self._friction_static = self._parse_joint_parameter(cfg.Fs, 0.0)   # 静摩擦系数
++        self._friction_dynamic = self._parse_joint_parameter(cfg.Fd, 0.0)  # 动摩擦系数
++        self._activation_vel = self._parse_joint_parameter(cfg.Va, 0.01)   # 摩擦激活速度
+ 
+     def compute(
+         self, control_action: ArticulationActions, joint_pos: torch.Tensor, joint_vel: torch.Tensor
+     ) -> ArticulationActions:
+-        # save current joint vel
++        """计算实际输出扭矩
++        
++        步骤:
++        1. 保存当前关节速度
++        2. 调用父类计算期望扭矩（PD控制）
++        3. 应用摩擦模型
++        4. 应用扭矩-速度限制
++        
++        Args:
++            control_action: 控制动作（目标位置/速度）
++            joint_pos: 当前关节位置
++            joint_vel: 当前关节速度
++            
++        Returns:
++            修正后的控制动作（仅包含扭矩）
++        """
++        # 1. 保存当前关节速度（用于后续的速度方向判断）
+         self._joint_vel[:] = joint_vel
+-        # calculate the desired joint torques
++        
++        # 2. 调用父类的 PD 控制器计算期望扭矩
+         control_action = super().compute(control_action, joint_pos, joint_vel)
+ 
+-        # apply friction model on the torque
++        # 3. 应用摩擦模型减少扭矩
++        # 摩擦力 = 静摩擦(tanh平滑) + 动摩擦(线性)
++        # tanh函数用于平滑过渡，避免零速度附近的不连续
+         self.applied_effort -= (
+             self._friction_static * torch.tanh(joint_vel / self._activation_vel) + self._friction_dynamic * joint_vel
+         )
+ 
++        # 4. 清空位置和速度命令，仅输出扭矩
+         control_action.joint_positions = None
+         control_action.joint_velocities = None
+         control_action.joint_efforts = self.applied_effort
+@@ -73,163 +133,282 @@ class UnitreeActuator(DelayedPDActuator):
+         return control_action
+ 
+     def _clip_effort(self, effort: torch.Tensor) -> torch.Tensor:
+-        # check if the effort is the same direction as the joint velocity
++        """根据扭矩-速度曲线裁剪扭矩
++        
++        逻辑:
++        1. 判断扭矩和速度是否同向
++           - 同向：使用 Y1（加速扭矩限制）
++           - 反向：使用 Y2（制动扭矩限制，通常更大）
++        
++        2. 判断当前速度是否超过拐点 X1
++           - 未超过：使用峰值扭矩
++           - 超过：根据线性衰减计算扭矩限制
++        
++        Args:
++            effort: 期望输出扭矩
++            
++        Returns:
++            裁剪后的扭矩
++        """
++        # 1. 检查扭矩和速度是否同向（正为同向）
+         same_direction = (self._joint_vel * effort) > 0
+         max_effort = torch.where(same_direction, self._effort_y1, self._effort_y2)
+-        # check if the joint velocity is less than the max speed at full torque
++        
++        # 2. 检查关节速度是否小于全扭矩最大速度（拐点）
+         max_effort = torch.where(
+-            self._joint_vel.abs() < self._velocity_x1, max_effort, self._compute_effort_limit(max_effort)
++            self._joint_vel.abs() < self._velocity_x1, 
++            max_effort,                              # 低速区：使用峰值扭矩
++            self._compute_effort_limit(max_effort)   # 高速区：线性衰减
+         )
++        
++        # 3. 裁剪到 [-max_effort, max_effort] 范围
+         return torch.clip(effort, -max_effort, max_effort)
+ 
+     def _compute_effort_limit(self, max_effort):
++        """计算高速区的扭矩限制（线性衰减）
++        
++        数学模型:
++            在 [X1, X2] 区间，扭矩从 max_effort 线性衰减到 0
++            
++            斜率: k = -max_effort / (X2 - X1)
++            扭矩: T = k * (v - X1) + max_effort
++        
++        物理意义:
++            电机在高速时由于反电动势增大，可输出扭矩降低
++        
++        Args:
++            max_effort: 峰值扭矩 (Y1 或 Y2)
++            
++        Returns:
++            当前速度下的扭矩限制
++        """
++        # 计算线性衰减的斜率（负值）
+         k = -max_effort / (self._velocity_x2 - self._velocity_x1)
++        
++        # 计算当前速度对应的扭矩限制
+         limit = k * (self._joint_vel.abs() - self._velocity_x1) + max_effort
++        
++        # 确保扭矩限制不小于0
+         return limit.clip(min=0.0)
+ 
+ 
+ @configclass
+ class UnitreeActuatorCfg(DelayedPDActuatorCfg):
+-    """
+-    Configuration for Unitree actuators.
++    """Unitree 执行器配置基类
++    
++    定义了 Unitree 执行器的扭矩-速度曲线参数和摩擦模型参数
++    所有具体型号的执行器配置都继承自此类
+     """
+ 
+     class_type: type = UnitreeActuator
+ 
++    # ========== 扭矩-速度曲线参数 ==========
+     X1: float = 1e9
+-    """Maximum Speed at Full Torque(T-N Curve Knee Point) Unit: rad/s"""
++    """全扭矩最大速度 (T-N 曲线拐点) 单位: rad/s
++    
++    物理意义: 超过此速度后，可输出扭矩开始线性衰减
++    默认 1e9 表示无限制（不考虑速度影响）
++    """
+ 
+     X2: float = 1e9
+-    """No-Load Speed Test Unit: rad/s"""
++    """空载最大速度（无负载测试） 单位: rad/s
++    
++    物理意义: 电机在无负载情况下的理论最大转速
++    到达此速度时，可输出扭矩降为 0
++    """
+ 
+     Y1: float = MISSING
+-    """Peak Torque Test(Torque and Speed in the Same Direction) Unit: N*m"""
++    """同向峰值扭矩（扭矩与速度同向） 单位: N·m
++    
++    物理意义: 电机加速时的最大扭矩
++    必须指定，无默认值
++    """
+ 
+     Y2: float | None = None
+-    """Peak Torque Test(Torque and Speed in the Opposite Direction) Unit: N*m"""
++    """反向峰值扭矩（扭矩与速度反向） 单位: N·m
++    
++    物理意义: 电机制动时的最大扭矩，通常大于 Y1
++    如果不指定，默认等于 Y1
++    """
+ 
++    # ========== 摩擦模型参数 ==========
+     Fs: float = 0.0
+-    """ Static friction coefficient """
++    """静摩擦系数 (Static Friction)
++    
++    物理意义: 低速时的摩擦力大小
++    摩擦力 = Fs * tanh(v / Va)
++    """
+ 
+     Fd: float = 0.0
+-    """ Dynamic friction coefficient """
++    """动摩擦系数 (Dynamic Friction)
++    
++    物理意义: 与速度成正比的摩擦力
++    摩擦力 = Fd * v
++    """
+ 
+     Va: float = 0.01
+-    """ Velocity at which the friction is fully activated """
++    """摩擦激活速度 单位: rad/s
++    
++    物理意义: 静摩擦完全激活的速度阈值
++    使用 tanh 函数平滑过渡，避免零速度附近的不连续
++    """
+ 
+ 
+ @configclass
+ class UnitreeActuatorCfg_M107_15(UnitreeActuatorCfg):
+-    X1 = 14.0
+-    X2 = 25.6
+-    Y1 = 150.0
+-    Y2 = 182.8
++    """M107-15 执行器配置
++    
++    应用: 中型四足机器人髋关节
++    峰值扭矩: 150 N·m (同向) / 182.8 N·m (反向)
++    额定功率: ~2.1 kW
++    """
++    X1 = 14.0      # 全扭矩最大速度: 14 rad/s
++    X2 = 25.6      # 空载最大速度: 25.6 rad/s
++    Y1 = 150.0     # 同向峰值扭矩: 150 N·m
++    Y2 = 182.8     # 反向峰值扭矩: 182.8 N·m
+ 
+-    armature = 0.063259741
++    armature = 0.063259741  # 电枢惯量: 0.0633 kg·m²
+ 
+ 
+ @configclass
+ class UnitreeActuatorCfg_M107_24(UnitreeActuatorCfg):
+-    X1 = 8.8
+-    X2 = 16
+-    Y1 = 240
+-    Y2 = 292.5
++    """M107-24 执行器配置
++    
++    应用: 重型四足/人形机器人膝关节
++    峰值扭矩: 240 N·m (同向) / 292.5 N·m (反向)
++    特点: 大扭矩，中速
++    """
++    X1 = 8.8       # 全扭矩最大速度: 8.8 rad/s
++    X2 = 16        # 空载最大速度: 16 rad/s
++    Y1 = 240       # 同向峰值扭矩: 240 N·m
++    Y2 = 292.5     # 反向峰值扭矩: 292.5 N·m
+ 
+-    armature = 0.160478022
++    armature = 0.160478022  # 电枢惯量: 0.160 kg·m²
+ 
+ 
+ @configclass
+ class UnitreeActuatorCfg_Go2HV(UnitreeActuatorCfg):
+-    X1 = 13.5
+-    X2 = 30
+-    Y1 = 20.2
+-    Y2 = 23.4
++    """Go2-HV 执行器配置
++    
++    应用: Go2 四足机器人全身关节
++    峰值扭矩: 20.2 N·m
++    特点: 高速低扭矩，适合敏捷运动
++    """
++    X1 = 13.5      # 全扭矩最大速度: 13.5 rad/s
++    X2 = 30        # 空载最大速度: 30 rad/s (高速)
++    Y1 = 20.2      # 同向峰值扭矩: 20.2 N·m
++    Y2 = 23.4      # 反向峰值扭矩: 23.4 N·m
+ 
+ 
+ @configclass
+ class UnitreeActuatorCfg_N7520_14p3(UnitreeActuatorCfg):
+-    # Decimal point cannot be used as variable name, use `p` instead
+-    X1 = 22.63
+-    X2 = 35.52
+-    Y1 = 71
+-    Y2 = 83.3
++    """N7520-14.3 执行器配置 (用 p 代替小数点)
++    
++    应用: 人形机器人髋关节 pitch/yaw、腰部 yaw
++    峰值扭矩: 71 N·m
++    特点: 中等扭矩，较高速度，有摩擦模型
++    """
++    X1 = 22.63     # 全扭矩最大速度: 22.63 rad/s
++    X2 = 35.52     # 空载最大速度: 35.52 rad/s
++    Y1 = 71        # 同向峰值扭矩: 71 N·m
++    Y2 = 83.3      # 反向峰值扭矩: 83.3 N·m
+ 
+-    Fs = 1.6
+-    Fd = 0.16
++    Fs = 1.6       # 静摩擦系数: 1.6 N·m
++    Fd = 0.16      # 动摩擦系数: 0.16 N·m·s/rad
+ 
+-    """
+-    | rotor  | 0.489e-4 kg·m²
+-    | gear_1 | 0.098e-4 kg·m² | ratio | 4.5
+-    | gear_2 | 0.533e-4 kg·m² | ratio | 48/22+1
+-    """
+-    armature = 0.01017752
++    # 电枢惯量计算:
++    # | 转子    | 0.489e-4 kg·m²
++    # | 一级齿轮 | 0.098e-4 kg·m² | 减速比 | 4.5
++    # | 二级齿轮 | 0.533e-4 kg·m² | 减速比 | 48/22+1
++    # 总惯量 = J_rotor + J_gear1 * i1² + J_gear2 * (i1*i2)²
++    armature = 0.01017752  # 0.0102 kg·m²
+ 
+ 
+ @configclass
+ class UnitreeActuatorCfg_N7520_22p5(UnitreeActuatorCfg):
+-    # Decimal point cannot be used as variable name, use `p` instead
+-    X1 = 14.5
+-    X2 = 22.7
+-    Y1 = 111.0
+-    Y2 = 131.0
++    """N7520-22.5 执行器配置
++    
++    应用: 人形机器人髋关节 roll、膝关节
++    峰值扭矩: 111 N·m
++    特点: 大扭矩，中速，适合承重关节
++    """
++    X1 = 14.5      # 全扭矩最大速度: 14.5 rad/s
++    X2 = 22.7      # 空载最大速度: 22.7 rad/s
++    Y1 = 111.0     # 同向峰值扭矩: 111 N·m
++    Y2 = 131.0     # 反向峰值扭矪: 131 N·m
+ 
+-    Fs = 2.4
+-    Fd = 0.24
++    Fs = 2.4       # 静摩擦系数: 2.4 N·m (较大)
++    Fd = 0.24      # 动摩擦系数: 0.24 N·m·s/rad
+ 
+-    """
+-    | rotor  | 0.489e-4 kg·m²
+-    | gear_1 | 0.109e-4 kg·m² | ratio | 4.5
+-    | gear_2 | 0.738e-4 kg·m² | ratio | 5.0
+-    """
+-    armature = 0.025101925
++    # 电枢惯量计算:
++    # | 转子    | 0.489e-4 kg·m²
++    # | 一级齿轮 | 0.109e-4 kg·m² | 减速比 | 4.5
++    # | 二级齿轮 | 0.738e-4 kg·m² | 减速比 | 5.0
++    armature = 0.025101925  # 0.0251 kg·m² (较大惯量)
+ 
+ 
+ @configclass
+ class UnitreeActuatorCfg_N5010_16(UnitreeActuatorCfg):
+-    X1 = 27.0
+-    X2 = 41.5
+-    Y1 = 9.5
+-    Y2 = 17.0
+-
+-    """
+-    | rotor  | 0.084e-4 kg·m²
+-    | gear_1 | 0.015e-4 kg·m² | ratio | 4
+-    | gear_2 | 0.068e-4 kg·m² | ratio | 4
++    """N5010-16 执行器配置
++    
++    应用: 轻量级手臂关节
++    峰值扭矩: 9.5 N·m
++    特点: 小扭矩，高速
+     """
+-    armature = 0.0021812
++    X1 = 27.0      # 全扭矩最大速度: 27 rad/s (高速)
++    X2 = 41.5      # 空载最大速度: 41.5 rad/s
++    Y1 = 9.5       # 同向峰值扭矩: 9.5 N·m
++    Y2 = 17.0      # 反向峰值扭矩: 17 N·m
++
++    # 电枢惯量计算:
++    # | 转子    | 0.084e-4 kg·m²
++    # | 一级齿轮 | 0.015e-4 kg·m² | 减速比 | 4
++    # | 二级齿轮 | 0.068e-4 kg·m² | 减速比 | 4
++    armature = 0.0021812  # 0.0022 kg·m² (小惯量)
+ 
+ 
+ @configclass
+ class UnitreeActuatorCfg_N5020_16(UnitreeActuatorCfg):
+-    X1 = 30.86
+-    X2 = 40.13
+-    Y1 = 24.8
+-    Y2 = 31.9
++    """N5020-16 执行器配置
++    
++    应用: 人形机器人肩膀、手臂、踝部
++    峰值扭矩: 24.8 N·m
++    特点: 中等扭矩，高速，低摩擦
++    """
++    X1 = 30.86     # 全扭矩最大速度: 30.86 rad/s (高速)
++    X2 = 40.13     # 空载最大速度: 40.13 rad/s
++    Y1 = 24.8      # 同向峰值扭矩: 24.8 N·m
++    Y2 = 31.9      # 反向峰值扭矩: 31.9 N·m
+ 
+-    Fs = 0.6
+-    Fd = 0.06
++    Fs = 0.6       # 静摩擦系数: 0.6 N·m (低摩擦)
++    Fd = 0.06      # 动摩擦系数: 0.06 N·m·s/rad
+ 
+-    """
+-    | rotor  | 0.139e-4 kg·m²
+-    | gear_1 | 0.017e-4 kg·m² | ratio | 46/18+1
+-    | gear_2 | 0.169e-4 kg·m² | ratio | 56/16+1
+-    """
+-    armature = 0.003609725
++    # 电枢惯量计算:
++    # | 转子    | 0.139e-4 kg·m²
++    # | 一级齿轮 | 0.017e-4 kg·m² | 减速比 | 46/18+1
++    # | 二级齿轮 | 0.169e-4 kg·m² | 减速比 | 56/16+1
++    armature = 0.003609725  # 0.0036 kg·m²
+ 
+ 
+ @configclass
+ class UnitreeActuatorCfg_W4010_25(UnitreeActuatorCfg):
+-    X1 = 15.3
+-    X2 = 24.76
+-    Y1 = 4.8
+-    Y2 = 8.6
+-
+-    Fs = 0.6
+-    Fd = 0.06
+-
+-    """
+-    | rotor  | 0.068e-4 kg·m²
+-    | gear_1 |                | ratio | 5
+-    | gear_2 |                | ratio | 5
++    """W4010-25 执行器配置
++    
++    应用: 人形机器人灵巧手腕 (wrist pitch/yaw)
++    峰值扭矩: 4.8 N·m
++    特点: 小扭矩，精细控制，适合末端执行器
+     """
+-    armature = 0.00425
++    X1 = 15.3      # 全扭矩最大速度: 15.3 rad/s
++    X2 = 24.76     # 空载最大速度: 24.76 rad/s
++    Y1 = 4.8       # 同向峰值扭矩: 4.8 N·m (最小)
++    Y2 = 8.6       # 反向峰值扭矩: 8.6 N·m
++
++    Fs = 0.6       # 静摩擦系数: 0.6 N·m
++    Fd = 0.06      # 动摩擦系数: 0.06 N·m·s/rad
++
++    # 电枢惯量计算:
++    # | 转子    | 0.068e-4 kg·m²
++    # | 一级齿轮 |                | 减速比 | 5
++    # | 二级齿轮 |                | 减速比 | 5
++    # 总减速比 = 25
++    armature = 0.00425  # 0.00425 kg·m²
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/__init__.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/__init__.py
+index 43e163d..7aea4ec 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/__init__.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/__init__.py
+@@ -1 +1,22 @@
+-from .robots import *
++"""
++===============================================================================
++Locomotion 任务包主入口
++===============================================================================
++
++本包包含 Unitree 机器人运动控制任务的所有配置和实现。
++
++主要模块:
++    - robots: 不同机器人（G1, Go2, H1）的环境配置
++    - mdp: MDP 相关函数（奖励、观测、事件、命令等）
++    - agents: PPO 算法配置
++
++使用方法:
++    通过 gymnasium 注册的任务 ID 创建环境:
++    ```python
++    import gymnasium as gym
++    env = gym.make("Unitree-G1-29dof-Velocity")
++    ```
++===============================================================================
++"""
++
++from .robots import *  # noqa: F401, F403
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/agents/rsl_rl_ppo_cfg.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/agents/rsl_rl_ppo_cfg.py
+index f5f98fb..4daa9ce 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/agents/rsl_rl_ppo_cfg.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/agents/rsl_rl_ppo_cfg.py
+@@ -3,34 +3,75 @@
+ #
+ # SPDX-License-Identifier: BSD-3-Clause
+ 
++"""
++===============================================================================
++PPO 算法基础配置文件
++===============================================================================
++
++本文件定义了用于机器人运动控制任务的 PPO (Proximal Policy Optimization) 算法配置。
++这是一个基础配置类，可被具体任务继承和定制。
++
++主要配置模块:
++    1. 训练运行参数: 训练迭代次数、保存间隔等
++    2. 策略网络配置: Actor-Critic 神经网络架构
++    3. PPO算法参数: 学习率、裁剪参数、折扣因子等核心超参数
++
++使用场景:
++    - 作为基类被 velocity_env_cfg, stair_env_cfg 等具体任务配置继承
++    - 提供稳定的 PPO 超参数基线
++    - 可针对特定任务进行微调
++===============================================================================
++"""
++
+ from isaaclab.utils import configclass
+ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
+ 
+ 
+ @configclass
+ class BasePPORunnerCfg(RslRlOnPolicyRunnerCfg):
+-    num_steps_per_env = 24
+-    max_iterations = 50000
+-    save_interval = 100
+-    experiment_name = ""  # same as task name
+-    empirical_normalization = False
++    """
++    基础 PPO 训练配置类
++    
++    继承自 RslRlOnPolicyRunnerCfg，定义了用于机器人运动控制的标准 PPO 配置。
++    包含训练超参数、神经网络架构和算法参数。
++    """
++    
++    # ======================== 训练运行参数 ========================
++    num_steps_per_env = 24  # 每个环境每次 rollout 收集的步数（trajectory 长度）
++    max_iterations = 50000  # 最大训练迭代次数
++    save_interval = 100  # 每 100 次迭代保存一次模型检查点
++    experiment_name = ""  # 实验名称（默认与任务名相同）
++    empirical_normalization = False  # 是否使用经验归一化（对观测值进行统计归一化）
++    
++    # ======================== 策略网络配置 ========================
+     policy = RslRlPpoActorCriticCfg(
+-        init_noise_std=1.0,
+-        actor_hidden_dims=[512, 256, 128],
+-        critic_hidden_dims=[512, 256, 128],
+-        activation="elu",
++        init_noise_std=1.0,  # 初始动作噪声标准差（用于探索）
++        actor_hidden_dims=[512, 256, 128],  # Actor（策略）网络隐藏层维度：3层神经网络
++        critic_hidden_dims=[512, 256, 128],  # Critic（价值）网络隐藏层维度：3层神经网络
++        activation="elu",  # 激活函数：ELU（指数线性单元），比 ReLU 更平滑
+     )
++    
++    # ======================== PPO 算法参数 ========================
+     algorithm = RslRlPpoAlgorithmCfg(
+-        value_loss_coef=1.0,
+-        use_clipped_value_loss=True,
+-        clip_param=0.2,
+-        entropy_coef=0.01,
+-        num_learning_epochs=5,
+-        num_mini_batches=4,
+-        learning_rate=1.0e-3,
+-        schedule="adaptive",
+-        gamma=0.99,
+-        lam=0.95,
+-        desired_kl=0.01,
+-        max_grad_norm=1.0,
++        # --- 价值函数相关 ---
++        value_loss_coef=1.0,  # 价值函数损失系数（在总损失中的权重）
++        use_clipped_value_loss=True,  # 使用裁剪的价值损失（类似于策略裁剪）
++        
++        # --- PPO 核心参数 ---
++        clip_param=0.2,  # PPO 裁剪参数 ε，限制策略更新幅度（标准值 0.2）
++        entropy_coef=0.01,  # 熵正则化系数，鼓励探索（值越大探索越多）
++        
++        # --- 训练优化参数 ---
++        num_learning_epochs=5,  # 每次 rollout 后的训练轮数（重复使用数据）
++        num_mini_batches=4,  # 每轮训练的 mini-batch 数量
++        learning_rate=1.0e-3,  # 学习率（Adam 优化器）
++        schedule="adaptive",  # 学习率调度策略：自适应（基于 KL 散度）
++        
++        # --- 回报计算参数 ---
++        gamma=0.99,  # 折扣因子（discount factor），控制对未来奖励的重视程度
++        lam=0.95,  # GAE-Lambda 参数，用于计算优势函数（Advantage）
++        
++        # --- 训练稳定性参数 ---
++        desired_kl=0.01,  # 目标 KL 散度，用于自适应学习率调整
++        max_grad_norm=1.0,  # 梯度裁剪最大范数，防止梯度爆炸
+     )
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/__init__.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/__init__.py
+index a003205..f93038e 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/__init__.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/__init__.py
+@@ -1,7 +1,33 @@
++"""
++===============================================================================
++MDP（马尔可夫决策过程）组件模块
++===============================================================================
++
++本模块定义了强化学习环境的核心 MDP 组件。
++
++主要模块:
++    - commands: 速度命令生成和课程学习配置
++    - curriculums: 训练难度自适应调整
++    - events: 环境重置、域随机化、模式切换事件
++    - observations: 观测函数（步态相位、模式标志、高度扫描等）
++    - rewards: 奖励函数（跟踪、姿态、步态、楼梯攀爬等）
++
++设计原则:
++    - 所有函数接受 env 作为第一个参数
++    - 函数应该是纯函数（无副作用，除了必要的状态缓存）
++    - 返回值为 torch.Tensor，形状为 (num_envs, ...)
++
++扩展方法:
++    继承 Isaac Lab 的基础 MDP 函数，并添加 Unitree 专用的函数。
++===============================================================================
++"""
++
+ from isaaclab.envs.mdp import *  # noqa: F401, F403
+ from isaaclab_tasks.manager_based.locomotion.velocity.mdp import *  # noqa: F401, F403
+ 
++# 导入自定义 MDP 组件
+ from .commands import *  # noqa: F401, F403
+ from .curriculums import *  # noqa: F401, F403
++from .events import *  # noqa: F401, F403
+ from .observations import *  # noqa: F401, F403
+ from .rewards import *  # noqa: F401, F403
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/commands/__init__.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/commands/__init__.py
+index fd5c9f2..9cd89bc 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/commands/__init__.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/commands/__init__.py
+@@ -1 +1,18 @@
++"""
++===============================================================================
++命令生成模块
++===============================================================================
++
++本模块定义了机器人运动控制的命令生成器配置。
++
++主要内容:
++    - UniformLevelVelocityCommandCfg: 支持课程学习的速度命令配置
++
++命令生成器的作用:
++    - 为机器人提供目标速度（线速度和角速度）
++    - 支持随机采样，增加训练多样性
++    - 支持课程学习，逐步提高命令难度
++===============================================================================
++"""
++
+ from .velocity_command import UniformLevelVelocityCommandCfg  # noqa: F401, F403
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/commands/velocity_command.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/commands/velocity_command.py
+index 38f425c..a701671 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/commands/velocity_command.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/commands/velocity_command.py
+@@ -1,3 +1,21 @@
++"""
++===============================================================================
++速度命令配置模块
++===============================================================================
++
++本文件定义了用于课程学习的速度命令配置类。
++
++主要功能:
++    - 在基础的 UniformVelocityCommandCfg 基础上扩展
++    - 添加 limit_ranges 字段，用于课程学习中的命令难度递增
++    - 支持自适应调整速度命令范围
++
++使用场景:
++    - 课程学习中逐步提高速度指令的难度
++    - 配合 curriculums.py 中的 lin_vel_cmd_levels 和 ang_vel_cmd_levels 函数
++===============================================================================
++"""
++
+ from __future__ import annotations
+ 
+ from dataclasses import MISSING
+@@ -8,4 +26,28 @@ from isaaclab.utils import configclass
+ 
+ @configclass
+ class UniformLevelVelocityCommandCfg(UniformVelocityCommandCfg):
+-    limit_ranges: UniformVelocityCommandCfg.Ranges = MISSING
++    """
++    分级速度命令配置类
++    
++    扩展自 UniformVelocityCommandCfg，添加了 limit_ranges 字段用于课程学习。
++    
++    课程学习机制:
++        - ranges: 当前训练使用的速度范围（动态调整）
++        - limit_ranges: 最终目标速度范围（上限）
++        - 训练过程中，ranges 会根据策略表现逐步接近 limit_ranges
++    
++    使用示例:
++        ```python
++        command_cfg = UniformLevelVelocityCommandCfg(
++            ranges=Ranges(
++                lin_vel_x=(-0.5, 0.5),  # 初始线速度范围
++                ang_vel_z=(-0.5, 0.5),  # 初始角速度范围
++            ),
++            limit_ranges=Ranges(
++                lin_vel_x=(-1.0, 1.0),  # 最终线速度范围
++                ang_vel_z=(-1.0, 1.0),  # 最终角速度范围
++            )
++        )
++        ```
++    """
++    limit_ranges: UniformVelocityCommandCfg.Ranges = MISSING  # 速度命令的最大限制范围（必须设置）
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/curriculums.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/curriculums.py
+index 05b3e51..d45a731 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/curriculums.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/curriculums.py
+@@ -1,3 +1,30 @@
++"""
++===============================================================================
++课程学习模块 - 速度命令难度自适应调整
++===============================================================================
++
++本文件实现了速度命令的课程学习（Curriculum Learning）机制。
++
++核心思想:
++    - 训练初期使用较小的速度命令范围，降低任务难度
++    - 随着策略性能提升，自动扩大速度命令范围
++    - 最终达到目标的最大速度范围
++
++主要函数:
++    - lin_vel_cmd_levels: 自适应调整线速度命令范围
++    - ang_vel_cmd_levels: 自适应调整角速度命令范围
++
++调整机制:
++    1. 每个 episode 结束时评估策略在速度跟踪任务上的表现
++    2. 如果平均奖励超过阈值（80%权重），则扩大命令范围
++    3. 扩大幅度为 ±0.1，直至达到 limit_ranges
++
++使用场景:
++    - 配合 UniformLevelVelocityCommandCfg 使用
++    - 在环境配置的 curriculum 部分注册
++===============================================================================
++"""
++
+ from __future__ import annotations
+ 
+ import torch
+@@ -13,27 +40,60 @@ def lin_vel_cmd_levels(
+     env_ids: Sequence[int],
+     reward_term_name: str = "track_lin_vel_xy",
+ ) -> torch.Tensor:
++    """
++    线速度命令难度自适应调整
++    
++    根据机器人在速度跟踪任务上的表现，自动调整线速度（x, y 方向）命令的范围。
++    
++    工作流程:
++        1. 获取当前速度命令配置（ranges 和 limit_ranges）
++        2. 计算本轮 episode 的平均速度跟踪奖励
++        3. 如果奖励 > 权重*0.8，则扩大命令范围 ±0.1
++        4. 确保不超过 limit_ranges 的限制
++    
++    Args:
++        env: 强化学习环境实例
++        env_ids: 本次重置的环境 ID 列表
++        reward_term_name: 用于评估的奖励项名称，默认 "track_lin_vel_xy"
++    
++    Returns:
++        当前线速度 x 的最大值（用于课程可视化）
++    
++    示例:
++        初始 ranges.lin_vel_x = [-0.5, 0.5]
++        limit_ranges.lin_vel_x = [-1.5, 1.5]
++        
++        经过多次调整:
++        [-0.5, 0.5] -> [-0.6, 0.6] -> [-0.7, 0.7] -> ... -> [-1.5, 1.5]
++    """
++    # 获取速度命令配置
+     command_term = env.command_manager.get_term("base_velocity")
+-    ranges = command_term.cfg.ranges
+-    limit_ranges = command_term.cfg.limit_ranges
++    ranges = command_term.cfg.ranges  # 当前使用的速度范围
++    limit_ranges = command_term.cfg.limit_ranges  # 最大限制范围
+ 
++    # 计算平均奖励（归一化到每秒）
+     reward_term = env.reward_manager.get_term_cfg(reward_term_name)
+     reward = torch.mean(env.reward_manager._episode_sums[reward_term_name][env_ids]) / env.max_episode_length_s
+ 
++    # 每个 episode 结束时检查是否需要调整
+     if env.common_step_counter % env.max_episode_length == 0:
++        # 如果表现良好（奖励 > 权重的80%），则扩大命令范围
+         if reward > reward_term.weight * 0.8:
+-            delta_command = torch.tensor([-0.1, 0.1], device=env.device)
++            delta_command = torch.tensor([-0.1, 0.1], device=env.device)  # 扩大 ±0.1
++            # 调整 x 方向线速度范围
+             ranges.lin_vel_x = torch.clamp(
+                 torch.tensor(ranges.lin_vel_x, device=env.device) + delta_command,
+-                limit_ranges.lin_vel_x[0],
+-                limit_ranges.lin_vel_x[1],
++                limit_ranges.lin_vel_x[0],  # 下限
++                limit_ranges.lin_vel_x[1],  # 上限
+             ).tolist()
++            # 调整 y 方向线速度范围
+             ranges.lin_vel_y = torch.clamp(
+                 torch.tensor(ranges.lin_vel_y, device=env.device) + delta_command,
+                 limit_ranges.lin_vel_y[0],
+                 limit_ranges.lin_vel_y[1],
+             ).tolist()
+ 
++    # 返回当前最大线速度（用于课程可视化）
+     return torch.tensor(ranges.lin_vel_x[1], device=env.device)
+ 
+ 
+@@ -42,20 +102,49 @@ def ang_vel_cmd_levels(
+     env_ids: Sequence[int],
+     reward_term_name: str = "track_ang_vel_z",
+ ) -> torch.Tensor:
++    """
++    角速度命令难度自适应调整
++    
++    根据机器人在角速度跟踪任务上的表现，自动调整角速度（z 轴旋转）命令的范围。
++    
++    工作流程:
++        与 lin_vel_cmd_levels 类似，但针对角速度（偏航角速度）
++    
++    Args:
++        env: 强化学习环境实例
++        env_ids: 本次重置的环境 ID 列表
++        reward_term_name: 用于评估的奖励项名称，默认 "track_ang_vel_z"
++    
++    Returns:
++        当前角速度 z 的最大值（用于课程可视化）
++    
++    示例:
++        初始 ranges.ang_vel_z = [-0.5, 0.5] rad/s
++        limit_ranges.ang_vel_z = [-2.0, 2.0] rad/s
++        
++        经过多次调整:
++        [-0.5, 0.5] -> [-0.6, 0.6] -> [-0.7, 0.7] -> ... -> [-2.0, 2.0]
++    """
++    # 获取速度命令配置
+     command_term = env.command_manager.get_term("base_velocity")
+-    ranges = command_term.cfg.ranges
+-    limit_ranges = command_term.cfg.limit_ranges
++    ranges = command_term.cfg.ranges  # 当前使用的速度范围
++    limit_ranges = command_term.cfg.limit_ranges  # 最大限制范围
+ 
++    # 计算平均奖励（归一化到每秒）
+     reward_term = env.reward_manager.get_term_cfg(reward_term_name)
+     reward = torch.mean(env.reward_manager._episode_sums[reward_term_name][env_ids]) / env.max_episode_length_s
+ 
++    # 每个 episode 结束时检查是否需要调整
+     if env.common_step_counter % env.max_episode_length == 0:
++        # 如果表现良好（奖励 > 权重的80%），则扩大命令范围
+         if reward > reward_term.weight * 0.8:
+-            delta_command = torch.tensor([-0.1, 0.1], device=env.device)
++            delta_command = torch.tensor([-0.1, 0.1], device=env.device)  # 扩大 ±0.1 rad/s
++            # 调整 z 轴角速度范围（偏航角速度）
+             ranges.ang_vel_z = torch.clamp(
+                 torch.tensor(ranges.ang_vel_z, device=env.device) + delta_command,
+-                limit_ranges.ang_vel_z[0],
+-                limit_ranges.ang_vel_z[1],
++                limit_ranges.ang_vel_z[0],  # 下限
++                limit_ranges.ang_vel_z[1],  # 上限
+             ).tolist()
+ 
++    # 返回当前最大角速度（用于课程可视化）
+     return torch.tensor(ranges.ang_vel_z[1], device=env.device)
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/observations.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/observations.py
+index b1df0d4..85434af 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/observations.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/observations.py
+@@ -8,6 +8,7 @@ if TYPE_CHECKING:
+ 
+ 
+ def gait_phase(env: ManagerBasedRLEnv, period: float) -> torch.Tensor:
++    """步态相位观测：返回 sin/cos 编码的步态周期"""
+     if not hasattr(env, "episode_length_buf"):
+         env.episode_length_buf = torch.zeros(env.num_envs, device=env.device, dtype=torch.long)
+ 
+@@ -17,3 +18,115 @@ def gait_phase(env: ManagerBasedRLEnv, period: float) -> torch.Tensor:
+     phase[:, 0] = torch.sin(global_phase * torch.pi * 2.0)
+     phase[:, 1] = torch.cos(global_phase * torch.pi * 2.0)
+     return phase
++
++
++def mode_flag(env: ManagerBasedRLEnv, num_modes: int = 4) -> torch.Tensor:
++    """
++    模式标志观测：返回 one-hot 编码的当前模式
++
++    用于条件策略，让网络知道当前处于哪种运行模式：
++        - 模式0 [1,0,0,0]: 平地盲走
++        - 模式1 [0,1,0,0]: 平地带传感器
++        - 模式2 [0,0,1,0]: 楼梯盲爬
++        - 模式3 [0,0,0,1]: 楼梯带传感器
++
++    Args:
++        env: 环境实例
++        num_modes: 模式数量，默认4
++
++    Returns:
++        shape (num_envs, num_modes) 的 one-hot 张量
++    """
++    # 初始化模式缓冲区（如果不存在）
++    if not hasattr(env, "_current_mode"):
++        # 默认模式0，后续由环境根据地形/传感器状态设置
++        env._current_mode = torch.zeros(env.num_envs, device=env.device, dtype=torch.long)
++
++    # 生成 one-hot 编码
++    mode_onehot = torch.zeros(env.num_envs, num_modes, device=env.device)
++    mode_onehot.scatter_(1, env._current_mode.unsqueeze(1), 1.0)
++
++    return mode_onehot
++
++
++def terrain_type_flag(env: ManagerBasedRLEnv) -> torch.Tensor:
++    """
++    地形类型标志：返回当前地形是否为楼梯
++
++    用于辅助模式判断：
++        - 0: 平地
++        - 1: 楼梯
++
++    Returns:
++        shape (num_envs, 1) 的张量
++    """
++    if not hasattr(env, "_terrain_is_stair"):
++        env._terrain_is_stair = torch.zeros(env.num_envs, 1, device=env.device)
++
++    return env._terrain_is_stair
++
++
++def sensor_available_flag(env: ManagerBasedRLEnv) -> torch.Tensor:
++    """
++    传感器可用标志：返回 height_scan 是否可用
++
++    用于辅助模式判断和降级逻辑：
++        - 0: 传感器不可用（盲模式）
++        - 1: 传感器可用
++
++    Returns:
++        shape (num_envs, 1) 的张量
++    """
++    if not hasattr(env, "_sensor_available"):
++        env._sensor_available = torch.ones(env.num_envs, 1, device=env.device)
++
++    return env._sensor_available
++
++
++def conditional_height_scan(
++    env: ManagerBasedRLEnv,
++    sensor_cfg: SceneEntityCfg,
++) -> torch.Tensor:
++    """
++    条件高度扫描：盲模式时输出置零
++
++    根据 _current_mode 决定是否使用 height_scan:
++        - 模式0/2 (盲模式): 输出全零
++        - 模式1/3 (传感器模式): 输出真实 height_scan
++
++    这让策略网络学会：当 mode_flag 指示盲模式时，忽略 height_scan 输入
++
++    Args:
++        env: 环境实例
++        sensor_cfg: 高度扫描器配置
++
++    Returns:
++        shape (num_envs, num_rays) 的高度扫描张量
++    """
++    from isaaclab.sensors import RayCaster
++
++    # 获取传感器
++    sensor: RayCaster = env.scene.sensors[sensor_cfg.name]
++
++    # 计算相对高度（与标准 height_scan 相同）
++    heights = sensor.data.pos_w[:, 2].unsqueeze(1) - sensor.data.ray_hits_w[..., 2] - 0.5
++
++    # 初始化模式缓冲区（如果不存在）
++    if not hasattr(env, "_current_mode"):
++        env._current_mode = torch.zeros(env.num_envs, device=env.device, dtype=torch.long)
++
++    # 创建盲模式掩码 (模式0和模式2是盲模式)
++    blind_mask = (env._current_mode == 0) | (env._current_mode == 2)
++
++    # 盲模式时置零
++    heights = torch.where(
++        blind_mask.unsqueeze(1).expand_as(heights),
++        torch.zeros_like(heights),
++        heights
++    )
++
++    return heights
++
++
++# 需要导入 SceneEntityCfg
++from isaaclab.managers import SceneEntityCfg
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/rewards.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/rewards.py
+index 95ddd8a..af70d2c 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/rewards.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/mdp/rewards.py
+@@ -1,3 +1,27 @@
++"""
++===============================================================================
++奖励函数模块
++===============================================================================
++
++本文件定义了用于机器人运动控制训练的各种奖励函数。
++
++奖励函数分类:
++    1. 关节惩罚 (Joint penalties): 能量消耗、站立静止等
++    2. 机器人本体奖励 (Robot): 姿态控制、方向对齐等
++    3. 足部奖励 (Feet rewards): 接触、抬腿高度、碰撞检测等
++    4. 步态奖励 (Feet Gait rewards): 步态同步、腾空时间等
++    5. 楼梯攀爬奖励 (Stair climbing): 向上进展、前向进度等
++
++设计原则:
++    - 奖励函数返回值应该是归一化的（便于权重调整）
++    - 惩罚性奖励应返回正值（在配置中设置负权重）
++    - 所有函数返回形状为 (num_envs,) 的张量
++
++使用方法:
++    在环境配置的 RewardsCfg 中注册奖励项，并设置权重
++===============================================================================
++"""
++
+ from __future__ import annotations
+ 
+ import torch
+@@ -9,57 +33,109 @@ except ImportError:
+     from isaaclab.utils.math import quat_rotate_inverse as quat_apply_inverse
+ from isaaclab.assets import Articulation, RigidObject
+ from isaaclab.managers import SceneEntityCfg
+-from isaaclab.sensors import ContactSensor
++from isaaclab.sensors import ContactSensor, RayCaster
+ 
+ if TYPE_CHECKING:
+     from isaaclab.envs import ManagerBasedRLEnv
+ 
+-"""
+-Joint penalties.
+-"""
++
++# ============================================================================
++#                           关节惩罚函数
++# ============================================================================
+ 
+ 
+ def energy(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+-    """Penalize the energy used by the robot's joints."""
++    """
++    能量消耗惩罚：惩罚机器人关节的能量消耗
++    
++    能量计算公式: E = Σ|τ| * |ω|
++    其中 τ 是关节力矩，ω 是关节角速度
++    
++    Args:
++        env: 环境实例
++        asset_cfg: 机器人资产配置
++    
++    Returns:
++        每个环境的能量消耗值
++    """
+     asset: Articulation = env.scene[asset_cfg.name]
+ 
+-    qvel = asset.data.joint_vel[:, asset_cfg.joint_ids]
+-    qfrc = asset.data.applied_torque[:, asset_cfg.joint_ids]
++    qvel = asset.data.joint_vel[:, asset_cfg.joint_ids]  # 关节角速度
++    qfrc = asset.data.applied_torque[:, asset_cfg.joint_ids]  # 关节施加的力矩
+     return torch.sum(torch.abs(qvel) * torch.abs(qfrc), dim=-1)
+ 
+ 
+ def stand_still(
+     env: ManagerBasedRLEnv, command_name: str = "base_velocity", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+ ) -> torch.Tensor:
++    """
++    站立静止奖励：在速度命令为零时，奖励保持默认姿态
++    
++    鼓励机器人在没有移动命令时保持静止站立姿态，避免不必要的晃动。
++    
++    Args:
++        env: 环境实例
++        command_name: 速度命令名称
++        asset_cfg: 机器人资产配置
++    
++    Returns:
++        关节位置与默认位置的偏差（仅在命令速度 < 0.1 时生效）
++    """
+     asset: Articulation = env.scene[asset_cfg.name]
+ 
++    # 计算关节位置与默认位置的偏差
+     reward = torch.sum(torch.abs(asset.data.joint_pos - asset.data.default_joint_pos), dim=1)
++    # 仅在速度命令很小时应用此奖励
+     cmd_norm = torch.norm(env.command_manager.get_command(command_name), dim=1)
+     return reward * (cmd_norm < 0.1)
+ 
+ 
+-"""
+-Robot.
+-"""
++# ============================================================================
++#                           机器人本体奖励
++# ============================================================================
+ 
+ 
+ def orientation_l2(
+     env: ManagerBasedRLEnv, desired_gravity: list[float], asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+ ) -> torch.Tensor:
+-    """Reward the agent for aligning its gravity with the desired gravity vector using L2 squared kernel."""
+-    # extract the used quantities (to enable type-hinting)
++    """
++    姿态对齐奖励：使用 L2 平方核奖励机器人重力方向与期望方向对齐
++    
++    通过比较机器人感受到的重力方向与期望重力方向（通常为 [0, 0, -1]），
++    鼓励机器人保持直立姿态。
++    
++    Args:
++        env: 环境实例
++        desired_gravity: 期望的重力方向向量（通常为 [0, 0, -1]）
++        asset_cfg: 机器人资产配置
++    
++    Returns:
++        姿态对齐程度，范围 [0, 1]，1 表示完全对齐
++    """
+     asset: RigidObject = env.scene[asset_cfg.name]
+ 
+     desired_gravity = torch.tensor(desired_gravity, device=env.device)
+-    cos_dist = torch.sum(asset.data.projected_gravity_b * desired_gravity, dim=-1)  # cosine distance
+-    normalized = 0.5 * cos_dist + 0.5  # map from [-1, 1] to [0, 1]
+-    return torch.square(normalized)
++    cos_dist = torch.sum(asset.data.projected_gravity_b * desired_gravity, dim=-1)  # 余弦距离
++    normalized = 0.5 * cos_dist + 0.5  # 从 [-1, 1] 映射到 [0, 1]
++    return torch.square(normalized)  # 使用平方核增强奖励
+ 
+ 
+ def upward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+-    """Penalize z-axis base linear velocity using L2 squared kernel."""
+-    # extract the used quantities (to enable type-hinting)
++    """
++    向上姿态惩罚：惩罚机器人姿态偏离竖直方向
++    
++    通过检查重力在机器人 z 轴（向上）方向的分量，惩罚机器人倾倒。
++    
++    Args:
++        env: 环境实例
++        asset_cfg: 机器人资产配置
++    
++    Returns:
++        姿态偏差的平方，值越大表示倾斜越严重
++    """
+     asset: RigidObject = env.scene[asset_cfg.name]
++    # projected_gravity_b[:, 2] 应该接近 -1（重力向下）
++    # 1 - projected_gravity_b[:, 2] 应该接近 2（完全直立）
+     reward = torch.square(1 - asset.data.projected_gravity_b[:, 2])
+     return reward
+ 
+@@ -67,26 +143,51 @@ def upward(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("r
+ def joint_position_penalty(
+     env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, stand_still_scale: float, velocity_threshold: float
+ ) -> torch.Tensor:
+-    """Penalize joint position error from default on the articulation."""
+-    # extract the used quantities (to enable type-hinting)
++    """
++    关节位置惩罚：惩罚关节位置偏离默认值
++    
++    在运动时适度惩罚，在静止时强力惩罚，鼓励机器人在静止时回到默认姿态。
++    
++    Args:
++        env: 环境实例
++        asset_cfg: 机器人资产配置
++        stand_still_scale: 静止时的惩罚缩放系数（通常 > 1.0）
++        velocity_threshold: 判断为运动的速度阈值
++    
++    Returns:
++        关节位置偏差的范数
++    """
+     asset: Articulation = env.scene[asset_cfg.name]
+-    cmd = torch.linalg.norm(env.command_manager.get_command("base_velocity"), dim=1)
+-    body_vel = torch.linalg.norm(asset.data.root_lin_vel_b[:, :2], dim=1)
+-    reward = torch.linalg.norm((asset.data.joint_pos - asset.data.default_joint_pos), dim=1)
++    cmd = torch.linalg.norm(env.command_manager.get_command("base_velocity"), dim=1)  # 命令速度
++    body_vel = torch.linalg.norm(asset.data.root_lin_vel_b[:, :2], dim=1)  # 实际速度
++    reward = torch.linalg.norm((asset.data.joint_pos - asset.data.default_joint_pos), dim=1)  # 关节偏差
++    # 如果有命令或在运动，使用标准惩罚；否则使用放大的惩罚
+     return torch.where(torch.logical_or(cmd > 0.0, body_vel > velocity_threshold), reward, stand_still_scale * reward)
+ 
+ 
+-"""
+-Feet rewards.
+-"""
++# ============================================================================
++#                           足部奖励函数
++# ============================================================================
+ 
+ 
+ def feet_stumble(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+-    # extract the used quantities (to enable type-hinting)
++    """
++    足部绊倒惩罚：惩罚足部撞击垂直表面
++    
++    通过比较接触力的水平分量（xy）和垂直分量（z），检测足部是否撞到了垂直障碍物。
++    正常行走时，垂直力（z）应该远大于水平力（xy）。
++    
++    Args:
++        env: 环境实例
++        sensor_cfg: 接触传感器配置
++    
++    Returns:
++        是否发生绊倒的布尔值（1 表示绊倒，0 表示正常）
++    """
+     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+-    forces_z = torch.abs(contact_sensor.data.net_forces_w[:, sensor_cfg.body_ids, 2])
+-    forces_xy = torch.linalg.norm(contact_sensor.data.net_forces_w[:, sensor_cfg.body_ids, :2], dim=2)
+-    # Penalize feet hitting vertical surfaces
++    forces_z = torch.abs(contact_sensor.data.net_forces_w[:, sensor_cfg.body_ids, 2])  # 垂直力
++    forces_xy = torch.linalg.norm(contact_sensor.data.net_forces_w[:, sensor_cfg.body_ids, :2], dim=2)  # 水平力
++    # 如果水平力 > 4 * 垂直力，说明撞到了垂直表面
+     reward = torch.any(forces_xy > 4 * forces_z, dim=1).float()
+     return reward
+ 
+@@ -223,3 +324,151 @@ def joint_mirror(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirror_joint
+         )
+     reward *= 1 / len(mirror_joints) if len(mirror_joints) > 0 else 0
+     return reward
++
++
++"""
++Stair climbing rewards.
++楼梯攀爬专用奖励函数
++"""
++
++
++def upward_progress(
++    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
++) -> torch.Tensor:
++    """
++    向上进展奖励：鼓励机器人向上攀爬楼梯
++
++    计算每步的高度增量，对正向增量给予奖励。
++    使用累计高度差避免"跳起来再落回去"骗奖励的情况。
++
++    Args:
++        env: 环境实例
++        asset_cfg: 机器人资产配置
++
++    Returns:
++        奖励张量，形状为 (num_envs,)
++    """
++    asset: RigidObject = env.scene[asset_cfg.name]
++
++    # 获取当前基座高度
++    current_height = asset.data.root_pos_w[:, 2]
++
++    # 初始化或获取上一步高度
++    if not hasattr(env, "_prev_base_height"):
++        env._prev_base_height = current_height.clone()
++        env._initial_height = current_height.clone()
++
++    # 形状不一致时进行重置（例如环境数量变化时）
++    if env._prev_base_height.shape != current_height.shape:
++        env._prev_base_height = current_height.clone()
++    if env._initial_height.shape != current_height.shape:
++        env._initial_height = current_height.clone()
++
++    # 按回合重置缓存，避免跨回合累计
++    if hasattr(env, "reset_buf"):
++        reset_mask = env.reset_buf > 0
++        if torch.any(reset_mask):
++            env._prev_base_height = torch.where(reset_mask, current_height, env._prev_base_height)
++            env._initial_height = torch.where(reset_mask, current_height, env._initial_height)
++
++    # 计算高度增量
++    height_delta = current_height - env._prev_base_height
++
++    # 更新上一步高度
++    env._prev_base_height = current_height.clone()
++
++    # 对正向高度增量给予奖励，负向增量给予较小惩罚
++    # 使用 clamp 避免过大的奖励/惩罚
++    reward = torch.clamp(height_delta, -0.1, 0.2)
++
++    # 额外奖励：相对于初始高度的总进展
++    total_progress = current_height - env._initial_height
++    progress_bonus = torch.clamp(total_progress * 0.1, 0, 0.5)
++
++    return reward + progress_bonus
++
++
++def base_height_adaptive(
++    env: ManagerBasedRLEnv,
++    target_height: float,
++    sensor_cfg: SceneEntityCfg,
++    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
++) -> torch.Tensor:
++    """
++    自适应基座高度惩罚：相对于脚下地形的高度
++
++    使用 RayCaster 获取脚下地形高度，计算相对高度偏差。
++    这样在楼梯上爬升时不会被错误惩罚。
++
++    Args:
++        env: 环境实例
++        target_height: 目标相对高度（机器人基座相对于地形的高度）
++        sensor_cfg: 高度扫描器配置
++        asset_cfg: 机器人资产配置
++
++    Returns:
++        惩罚张量，形状为 (num_envs,)
++    """
++    asset: RigidObject = env.scene[asset_cfg.name]
++    sensor: RayCaster = env.scene.sensors[sensor_cfg.name]
++
++    # 获取机器人基座世界高度
++    base_height_world = asset.data.root_pos_w[:, 2]
++
++    # 从高度扫描器获取脚下地形高度
++    # RayCaster 的 ray_hits_w 包含射线击中点的世界坐标
++    # 取中心区域的射线作为脚下地形高度估计
++    ray_hits = sensor.data.ray_hits_w
++
++    # 获取射线模式的尺寸信息
++    num_rays = ray_hits.shape[1]
++
++    # 取中心区域的射线（假设网格中心对应机器人正下方）
++    center_idx = num_rays // 2
++    # 取中心附近几条射线的平均值
++    start_idx = max(0, center_idx - 5)
++    end_idx = min(num_rays, center_idx + 5)
++
++    terrain_height = ray_hits[:, start_idx:end_idx, 2].mean(dim=1)
++
++    # 计算相对高度
++    relative_height = base_height_world - terrain_height
++
++    # 计算与目标高度的偏差
++    height_error = torch.square(relative_height - target_height)
++
++    return height_error
++
++
++def stair_forward_progress(
++    env: ManagerBasedRLEnv,
++    stair_direction: list[float] = [1.0, 0.0],
++    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
++) -> torch.Tensor:
++    """
++    沿楼梯方向的前进奖励
++
++    Args:
++        env: 环境实例
++        stair_direction: 楼梯方向单位向量 [x, y]
++        asset_cfg: 机器人资产配置
++
++    Returns:
++        奖励张量，形状为 (num_envs,)
++    """
++    asset: RigidObject = env.scene[asset_cfg.name]
++
++    # 获取机器人在世界坐标系下的线速度
++    lin_vel = asset.data.root_lin_vel_w[:, :2]
++
++    # 楼梯方向向量
++    stair_dir = torch.tensor(stair_direction, device=env.device)
++    stair_dir = stair_dir / torch.norm(stair_dir)
++
++    # 计算沿楼梯方向的速度分量
++    forward_vel = torch.sum(lin_vel * stair_dir, dim=1)
++
++    # 对正向速度给予奖励
++    reward = torch.clamp(forward_vel, 0, 1.0)
++
++    return reward
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/__init__.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/__init__.py
+index e69de29..a28701f 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/__init__.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/__init__.py
+@@ -0,0 +1,19 @@
++"""
++===============================================================================
++机器人任务配置包
++===============================================================================
++
++本包包含不同 Unitree 机器人的任务配置。
++
++支持的机器人:
++    - G1: 29自由度人形机器人
++    - Go2: 四足机器人
++    - H1: 人形机器人
++
++每个机器人子包包含:
++    - __init__.py: 任务注册
++    - velocity_env_cfg.py: 速度跟踪环境配置
++    - stair_env_cfg.py: 楼梯攀爬环境配置（部分机器人）
++    - unified_env_cfg.py: 统一条件策略配置（部分机器人）
++===============================================================================
++"""
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/__init__.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/__init__.py
+index e67a144..42e177e 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/__init__.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/__init__.py
+@@ -1,5 +1,18 @@
+ import gymnasium as gym
+ 
++# ============================================================================
++#                       4阶段训练任务注册
++# ============================================================================
++# 训练顺序：
++#   阶段1: Unitree-G1-29dof-Velocity        - 盲走（平地，无 height_scan）
++#   阶段2: Unitree-G1-29dof-Velocity-HeightScan - 带传感器行走（平地，有 height_scan）
++#   阶段3: Unitree-G1-29dof-Stair-Blind     - 盲爬楼梯（楼梯，无 height_scan）
++#   阶段4: Unitree-G1-29dof-Stair           - 带传感器爬楼梯（楼梯，有 height_scan）
++# ============================================================================
++
++# ============================================================================
++# 阶段1: 盲走（平地，无 height_scan）
++# ============================================================================
+ gym.register(
+     id="Unitree-G1-29dof-Velocity",
+     entry_point="isaaclab.envs:ManagerBasedRLEnv",
+@@ -10,3 +23,62 @@ gym.register(
+         "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
+     },
+ )
++
++# ============================================================================
++# 阶段2: 带传感器行走（平地，有 height_scan）
++# ============================================================================
++gym.register(
++    id="Unitree-G1-29dof-Velocity-HeightScan",
++    entry_point="isaaclab.envs:ManagerBasedRLEnv",
++    disable_env_checker=True,
++    kwargs={
++        "env_cfg_entry_point": f"{__name__}.velocity_env_cfg:RobotHeightScanEnvCfg",
++        "play_env_cfg_entry_point": f"{__name__}.velocity_env_cfg:RobotHeightScanPlayEnvCfg",
++        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
++    },
++)
++
++# ============================================================================
++# 阶段3: 盲爬楼梯（楼梯，无 height_scan）
++# ============================================================================
++gym.register(
++    id="Unitree-G1-29dof-Stair-Blind",
++    entry_point="isaaclab.envs:ManagerBasedRLEnv",
++    disable_env_checker=True,
++    kwargs={
++        "env_cfg_entry_point": f"{__name__}.stair_env_cfg:StairBlindEnvCfg",
++        "play_env_cfg_entry_point": f"{__name__}.stair_env_cfg:StairBlindPlayEnvCfg",
++        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
++    },
++)
++
++# ============================================================================
++# 阶段4: 带传感器爬楼梯（楼梯，有 height_scan）
++# ============================================================================
++gym.register(
++    id="Unitree-G1-29dof-Stair",
++    entry_point="isaaclab.envs:ManagerBasedRLEnv",
++    disable_env_checker=True,
++    kwargs={
++        "env_cfg_entry_point": f"{__name__}.stair_env_cfg:StairClimbEnvCfg",
++        "play_env_cfg_entry_point": f"{__name__}.stair_env_cfg:StairClimbPlayEnvCfg",
++        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
++    },
++)
++
++# ============================================================================
++#                       统一条件策略任务
++# ============================================================================
++# 一个策略同时学习4种模式，通过 mode_flag 控制行为
++# 部署时可智能切换模式，无需加载多个模型
++# ============================================================================
++gym.register(
++    id="Unitree-G1-29dof-Unified",
++    entry_point="isaaclab.envs:ManagerBasedRLEnv",
++    disable_env_checker=True,
++    kwargs={
++        "env_cfg_entry_point": f"{__name__}.unified_env_cfg:UnifiedEnvCfg",
++        "play_env_cfg_entry_point": f"{__name__}.unified_env_cfg:UnifiedPlayEnvCfg",
++        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
++    },
++)
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/velocity_env_cfg.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/velocity_env_cfg.py
+index 8bdd006..565dfcf 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/velocity_env_cfg.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/29dof/velocity_env_cfg.py
+@@ -50,8 +50,8 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
+     border_width=20.0,  # 地形边界宽度，防止机器人走出边界，单位：米
+     num_rows=9,  # 地形行数，用于课程学习的难度等级数量
+     num_cols=21,  # 地形列数，每个难度等级的地形变体数量
+-    horizontal_scale=0.1,  # 水平分辨率，高度图采样间隔，单位：米
+-    vertical_scale=0.005,  # 垂直分辨率，高度值缩放因子，单位：米
++    horizontal_scale=0.1,  # 水平分辨率，高度图采样间隔，单位：米   ？？
++    vertical_scale=0.005,  # 垂直分辨率，高度值缩放因子，单位：米  ？？
+     slope_threshold=0.75,  # 斜坡阈值，用于法线计算和可行走区域判定
+     difficulty_range=(0.0, 1.0),  # 难度范围 (最小难度, 最大难度)，用于课程学习
+     use_cache=False,  # 是否使用缓存地形，False表示每次重新生成
+@@ -76,14 +76,23 @@ class RobotSceneCfg(InteractiveSceneCfg):
+         - 传感器配置：高度扫描器、接触力传感器
+         - 灯光配置：天空穹顶灯光
+     """
+-
++    """
++    terrain  
++    
++    """
+     # ======================== 地形配置 ========================
+     terrain = TerrainImporterCfg(
++
+         prim_path="/World/ground",  # 地形在USD场景中的路径
++        
+         terrain_type="generator",  # 地形类型: "plane"(平面) 或 "generator"(程序生成)
++        
+         terrain_generator=COBBLESTONE_ROAD_CFG,  # 地形生成器配置，None表示使用默认平面
++        
+         max_init_terrain_level=COBBLESTONE_ROAD_CFG.num_rows - 1,  # 初始化时的最大地形难度等级
++        
+         collision_group=-1,  # 碰撞组ID，-1表示与所有物体碰撞
++        
+         # 物理材质配置：定义地形的摩擦和弹性特性
+         physics_material=sim_utils.RigidBodyMaterialCfg(
+             friction_combine_mode="multiply",  # 摩擦力组合模式：相乘
+@@ -91,12 +100,15 @@ class RobotSceneCfg(InteractiveSceneCfg):
+             static_friction=1.0,  # 静摩擦系数
+             dynamic_friction=1.0,  # 动摩擦系数
+         ),
++        
+         # 视觉材质配置：地形的外观纹理
+         visual_material=sim_utils.MdlFileCfg(
+             mdl_path=f"{ISAACLAB_NUCLEUS_DIR}/Materials/TilesMarbleSpiderWhiteBrickBondHoned/TilesMarbleSpiderWhiteBrickBondHoned.mdl",
++            #NVIDIA MDL 材质文件路径，这是一个白色大理石砖纹理
+             project_uvw=True,  # 使用投影UV映射
+             texture_scale=(0.25, 0.25),  # 纹理缩放比例
+         ),
++        
+         debug_vis=False,  # 是否显示调试可视化
+     )
+ 
+@@ -110,7 +122,7 @@ class RobotSceneCfg(InteractiveSceneCfg):
+     height_scanner = RayCasterCfg(
+         prim_path="{ENV_REGEX_NS}/Robot/torso_link",  # 传感器安装位置：躯干链接
+         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),  # 射线起点偏移，从高处向下投射
+-        ray_alignment="yaw",  # 射线对齐方式：跟随机器人偏航角
++        ray_alignment="yaw",  # 射线对齐方式：跟随机器人偏航角  什么
+         pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),  # 网格采样模式：分辨率0.1m，范围1.6mx1.0m
+         debug_vis=False,  # 是否显示射线调试可视化
+         mesh_prim_paths=["/World/ground"],  # 射线检测的目标网格路径
+@@ -766,7 +778,7 @@ class RobotEnvCfg(ManagerBasedRLEnvCfg):
+ class RobotPlayEnvCfg(RobotEnvCfg):
+     """
+     演示/测试环境配置类 - 用于策略评估和可视化
+-    
++
+     继承自RobotEnvCfg，但修改了部分参数使其更适合演示:
+         - 减少并行环境数量（便于可视化）
+         - 减少地形块数量（加快加载）
+@@ -790,3 +802,164 @@ class RobotPlayEnvCfg(RobotEnvCfg):
+         # 使用完整速度范围：测试策略的极限能力
+         # 将初始范围设置为limit_ranges，跳过课程学习的渐进过程
+         self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
++
++
++# ============================================================================
++#                  阶段2：带传感器行走（平地，有 height_scan）
++# ============================================================================
++@configclass
++class HeightScanSceneCfg(RobotSceneCfg):
++    """
++    带高度扫描的场景配置（阶段2）
++
++    与 RobotSceneCfg 相同，但修正 height_scanner 的 z 偏移
++    使其能够正确感知地形
++    """
++
++    # 高度扫描器：修正 z 偏移，使其能正确感知地形
++    height_scanner = RayCasterCfg(
++        prim_path="{ENV_REGEX_NS}/Robot/torso_link",
++        offset=RayCasterCfg.OffsetCfg(pos=(0.2, 0.0, 0.8)),  # 修正：从 20.0 改为 0.8
++        ray_alignment="yaw",
++        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
++        debug_vis=False,
++        mesh_prim_paths=["/World/ground"],
++    )
++
++
++@configclass
++class HeightScanObservationsCfg:
++    """
++    带高度扫描的观测配置（阶段2）
++
++    在原有观测基础上添加 height_scan 观测
++    """
++
++    @configclass
++    class PolicyCfg(ObsGroup):
++        """策略网络观测组 - 包含高度扫描"""
++
++        base_ang_vel = ObsTerm(
++            func=mdp.base_ang_vel,
++            scale=0.2,
++            noise=Unoise(n_min=-0.2, n_max=0.2),
++        )
++
++        projected_gravity = ObsTerm(
++            func=mdp.projected_gravity,
++            noise=Unoise(n_min=-0.05, n_max=0.05),
++        )
++
++        velocity_commands = ObsTerm(
++            func=mdp.generated_commands,
++            params={"command_name": "base_velocity"},
++        )
++
++        joint_pos_rel = ObsTerm(
++            func=mdp.joint_pos_rel,
++            noise=Unoise(n_min=-0.01, n_max=0.01),
++        )
++
++        joint_vel_rel = ObsTerm(
++            func=mdp.joint_vel_rel,
++            scale=0.05,
++            noise=Unoise(n_min=-1.5, n_max=1.5),
++        )
++
++        last_action = ObsTerm(func=mdp.last_action)
++
++        # 高度扫描 - 阶段2新增观测
++        height_scan = ObsTerm(
++            func=mdp.height_scan,
++            params={"sensor_cfg": SceneEntityCfg("height_scanner")},
++            noise=Unoise(n_min=-0.1, n_max=0.1),
++            clip=(-1.0, 1.0),
++        )
++
++        def __post_init__(self):
++            self.history_length = 5
++            self.enable_corruption = True
++            self.concatenate_terms = True
++
++    policy: PolicyCfg = PolicyCfg()
++
++    @configclass
++    class CriticCfg(ObsGroup):
++        """评论家网络观测组"""
++
++        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
++        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale=0.2)
++        projected_gravity = ObsTerm(func=mdp.projected_gravity)
++
++        velocity_commands = ObsTerm(
++            func=mdp.generated_commands,
++            params={"command_name": "base_velocity"},
++        )
++
++        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
++        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05)
++        last_action = ObsTerm(func=mdp.last_action)
++
++        # 评论家也使用高度扫描（无噪声）
++        height_scan = ObsTerm(
++            func=mdp.height_scan,
++            params={"sensor_cfg": SceneEntityCfg("height_scanner")},
++            clip=(-1.0, 1.0),
++        )
++
++        def __post_init__(self):
++            self.history_length = 5
++
++    critic: CriticCfg = CriticCfg()
++
++
++@configclass
++class RobotHeightScanEnvCfg(ManagerBasedRLEnvCfg):
++    """
++    带高度扫描的平地行走环境配置（阶段2）
++
++    在平地上训练机器人使用 height_scan 观测
++    为后续楼梯任务做准备
++    """
++
++    scene: HeightScanSceneCfg = HeightScanSceneCfg(num_envs=4096, env_spacing=2.5)
++    observations: HeightScanObservationsCfg = HeightScanObservationsCfg()
++    actions: ActionsCfg = ActionsCfg()
++    commands: CommandsCfg = CommandsCfg()
++    rewards: RewardsCfg = RewardsCfg()
++    terminations: TerminationsCfg = TerminationsCfg()
++    events: EventCfg = EventCfg()
++    curriculum: CurriculumCfg = CurriculumCfg()
++
++    def __post_init__(self):
++        self.decimation = 4
++        self.episode_length_s = 20.0
++
++        self.sim.dt = 0.005
++        self.sim.render_interval = self.decimation
++        self.sim.physics_material = self.scene.terrain.physics_material
++        self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
++
++        self.scene.contact_forces.update_period = self.sim.dt
++        self.scene.height_scanner.update_period = self.decimation * self.sim.dt
++
++        if getattr(self.curriculum, "terrain_levels", None) is not None:
++            if self.scene.terrain.terrain_generator is not None:
++                self.scene.terrain.terrain_generator.curriculum = True
++        else:
++            if self.scene.terrain.terrain_generator is not None:
++                self.scene.terrain.terrain_generator.curriculum = False
++
++
++@configclass
++class RobotHeightScanPlayEnvCfg(RobotHeightScanEnvCfg):
++    """带高度扫描的平地行走演示环境配置"""
++
++    def __post_init__(self):
++        super().__post_init__()
++
++        self.scene.num_envs = 32
++        self.scene.terrain.terrain_generator.num_rows = 2
++        self.scene.terrain.terrain_generator.num_cols = 10
++
++        self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/__init__.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/__init__.py
+index e69de29..1087173 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/__init__.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/g1/__init__.py
+@@ -0,0 +1,16 @@
++"""
++===============================================================================
++Unitree G1 人形机器人任务包
++===============================================================================
++
++本包包含 Unitree G1 29自由度人形机器人的所有任务配置。
++
++任务列表:
++    - 29dof/: 29自由度版本的各种训练任务
++
++G1 机器人特点:
++    - 人形机器人，适合复杂运动控制
++    - 29个可控关节，提供高自由度
++    - 支持平地行走、楼梯攀爬等多种任务
++===============================================================================
++"""
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/go2/__init__.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/go2/__init__.py
+index 0bc22a3..7ae0ad7 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/go2/__init__.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/go2/__init__.py
+@@ -1,12 +1,35 @@
++"""
++===============================================================================
++Unitree Go2 四足机器人任务注册
++===============================================================================
++
++本文件注册 Unitree Go2 四足机器人的速度跟踪任务。
++
++任务 ID: Unitree-Go2-Velocity
++
++任务描述:
++    - 训练 Go2 四足机器人进行速度跟踪
++    - 支持平地和复杂地形
++    - 使用 PPO 算法训练
++
++使用方法:
++    ```python
++    import gymnasium as gym
++    env = gym.make("Unitree-Go2-Velocity")
++    ```
++===============================================================================
++"""
++
+ import gymnasium as gym
+ 
++# 注册 Go2 速度跟踪任务
+ gym.register(
+     id="Unitree-Go2-Velocity",
+     entry_point="isaaclab.envs:ManagerBasedRLEnv",
+     disable_env_checker=True,
+     kwargs={
+-        "env_cfg_entry_point": f"{__name__}.velocity_env_cfg:RobotEnvCfg",
+-        "play_env_cfg_entry_point": f"{__name__}.velocity_env_cfg:RobotPlayEnvCfg",
+-        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
++        "env_cfg_entry_point": f"{__name__}.velocity_env_cfg:RobotEnvCfg",  # 训练环境配置
++        "play_env_cfg_entry_point": f"{__name__}.velocity_env_cfg:RobotPlayEnvCfg",  # 推理环境配置
++        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",  # PPO配置
+     },
+ )
+diff --git a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/h1/__init__.py b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/h1/__init__.py
+index 7de74f4..c68adb1 100644
+--- a/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/h1/__init__.py
++++ b/source/unitree_rl_lab/unitree_rl_lab/tasks/locomotion/robots/h1/__init__.py
+@@ -1,12 +1,35 @@
++"""
++===============================================================================
++Unitree H1 人形机器人任务注册
++===============================================================================
++
++本文件注册 Unitree H1 人形机器人的速度跟踪任务。
++
++任务 ID: Unitree-H1-Velocity
++
++任务描述:
++    - 训练 H1 人形机器人进行速度跟踪
++    - 支持平地和复杂地形
++    - 使用 PPO 算法训练
++
++使用方法:
++    ```python
++    import gymnasium as gym
++    env = gym.make("Unitree-H1-Velocity")
++    ```
++===============================================================================
++"""
++
+ import gymnasium as gym
+ 
++# 注册 H1 速度跟踪任务
+ gym.register(
+     id="Unitree-H1-Velocity",
+     entry_point="isaaclab.envs:ManagerBasedRLEnv",
+     disable_env_checker=True,
+     kwargs={
+-        "env_cfg_entry_point": f"{__name__}.velocity_env_cfg:RobotEnvCfg",
+-        "play_env_cfg_entry_point": f"{__name__}.velocity_env_cfg:RobotPlayEnvCfg",
+-        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
++        "env_cfg_entry_point": f"{__name__}.velocity_env_cfg:RobotEnvCfg",  # 训练环境配置
++        "play_env_cfg_entry_point": f"{__name__}.velocity_env_cfg:RobotPlayEnvCfg",  # 推理环境配置
++        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",  # PPO配置
+     },
+ )
