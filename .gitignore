@@ -1,25 +1,14 @@
 ﻿.idea/
 
-# 忽略子项目（独立管理）
-unitree_rl_lab/
-unitree_mujoco/
-unitree_ros/
-IsaacLab/
-
 # Python
 __pycache__/
 *.py[cod]
 *.egg-info/
-.venv/
-venv/
-env/
 
-# 训练日志
+# 训练日志和模型（太大不上传）
 logs/
 *.pt
 *.pth
 
 # IDE
 .vscode/
-*.swp
-*.swo
