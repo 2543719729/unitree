@@ -472,3 +472,83 @@ def stair_forward_progress(
     reward = torch.clamp(forward_vel, 0, 1.0)
 
     return reward
+
+
+"""
+Marching in place rewards (模式4专用奖励).
+原地踏步专用奖励函数
+"""
+
+
+def base_lin_vel_xy_l2(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """
+    基座xy平面线速度L2惩罚：惩罚机器人在xy平面上的移动
+
+    用于原地踏步任务，确保机器人不会前后左右移动。
+
+    Args:
+        env: 环境实例
+        asset_cfg: 机器人资产配置
+
+    Returns:
+        惩罚张量，形状为 (num_envs,)
+    """
+    asset: RigidObject = env.scene[asset_cfg.name]
+
+    # 获取xy平面上的线速度
+    lin_vel_xy = asset.data.root_lin_vel_w[:, :2]
+
+    # 计算L2范数的平方
+    return torch.sum(torch.square(lin_vel_xy), dim=1)
+
+
+def ang_vel_z_l2(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """
+    yaw轴角速度L2惩罚：惩罚机器人的自转
+
+    用于原地踏步任务，确保机器人不会原地旋转。
+
+    Args:
+        env: 环境实例
+        asset_cfg: 机器人资产配置
+
+    Returns:
+        惩罚张量，形状为 (num_envs,)
+    """
+    asset: RigidObject = env.scene[asset_cfg.name]
+
+    # 获取yaw轴（z轴）角速度
+    ang_vel_z = asset.data.root_ang_vel_w[:, 2]
+
+    # 计算平方
+    return torch.square(ang_vel_z)
+
+
+def joint_vel_magnitude(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """
+    关节速度幅值奖励：鼓励关节运动
+
+    用于原地踏步任务，鼓励腿部关节运动以产生踏步动作，
+    避免机器人完全静止不动。
+
+    Args:
+        env: 环境实例
+        asset_cfg: 机器人资产配置
+
+    Returns:
+        奖励张量，形状为 (num_envs,)
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+
+    # 计算所有关节速度的绝对值之和
+    joint_vel_abs = torch.abs(asset.data.joint_vel[:, asset_cfg.joint_ids])
+
+    # 返回平均关节速度
+    return torch.mean(joint_vel_abs, dim=1)
+

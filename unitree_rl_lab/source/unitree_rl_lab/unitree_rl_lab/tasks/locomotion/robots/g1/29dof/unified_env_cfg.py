@@ -2,11 +2,12 @@
 ===============================================================================
 Unitree G1 29DOF 统一条件策略环境配置文件
 
-本文件实现4模式条件策略训练：
+本文件实现5模式条件策略训练：
     - 模式0: 平地盲走 (无 height_scan)
     - 模式1: 平地带传感器 (有 height_scan)
     - 模式2: 楼梯盲爬 (无 height_scan)
     - 模式3: 楼梯带传感器 (有 height_scan)
+    - 模式4: 原地踏步 (无移动，强调步态)
 
 通过 mode_flag 观测让网络学会根据模式调整行为。
 训练时随机切换模式和地形，部署时可智能选择模式。
@@ -211,9 +212,12 @@ class UnifiedEventCfg:
         func=mdp.reset_mode_randomly,
         mode="reset",
         params={
-            "num_modes": 4,
-            # 调整概率匹配地形分布：40%平地(模式0/1)，60%楼梯(模式2/3)
-            "mode_probabilities": [0.20, 0.20, 0.30, 0.30],
+            "num_modes": 5,
+            # 调整概率分布：
+            # 模式0/1 (平地): 各15% = 30%
+            # 模式2/3 (楼梯): 各20% = 40%
+            # 模式4 (原地踏步): 30%
+            "mode_probabilities": [0.15, 0.15, 0.20, 0.20, 0.30],
         },
     )
 
@@ -329,7 +333,7 @@ class UnifiedObservationsCfg:
         # ========== 条件策略核心：模式标志 ==========
         mode_flag = ObsTerm(
             func=mdp.mode_flag,
-            params={"num_modes": 4},
+            params={"num_modes": 5},
         )
 
         # ========== 条件 height_scan（盲模式时置零）==========
@@ -367,7 +371,7 @@ class UnifiedObservationsCfg:
         # 模式标志
         mode_flag = ObsTerm(
             func=mdp.mode_flag,
-            params={"num_modes": 4},
+            params={"num_modes": 5},
         )
 
         # 评论家始终使用 height_scan（无噪声，特权信息）
@@ -394,6 +398,7 @@ class UnifiedRewardsCfg:
     奖励函数根据 mode_flag 自动调整：
         - 模式0/1 (平地): 主要关注速度跟踪
         - 模式2/3 (楼梯): 额外增加上楼梯奖励
+        - 模式4 (原地踏步): 关注步态质量和位置保持
     """
 
     # ========== 任务奖励 ==========
@@ -418,12 +423,14 @@ class UnifiedRewardsCfg:
     )
 
     # ========== 存活奖励 ==========
-    alive = RewTerm(func=mdp.is_alive, weight=0.15)
+    # 提高存活奖励，鼓励机器人保持站立
+    alive = RewTerm(func=mdp.is_alive, weight=1.0)
 
     # ========== 正则化惩罚 ==========
-    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.0)
+    # 降低垂直速度惩罚，避免过度限制
+    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-0.5)
     ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)
+    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-0.5)
 
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
     joint_acc_l2 = RewTerm(
@@ -460,6 +467,39 @@ class UnifiedRewardsCfg:
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=[".*hip.*_link", ".*knee_link"]),
             "threshold": 1.0,
         },
+    )
+
+    # ========== 原地踏步专用奖励 (模式4) ==========
+    # 惩罚xy平面上的基座线速度（保持原地不动）
+    marching_stay_in_place = RewTerm(
+        func=mdp.base_lin_vel_xy_l2,
+        weight=-2.0,  # 强惩罚，确保不移动
+        params={},
+    )
+
+    # 惩罚yaw轴角速度（保持不自转）
+    marching_no_yaw = RewTerm(
+        func=mdp.ang_vel_z_l2,
+        weight=-1.0,  # 惩罚自转
+        params={},
+    )
+
+    # 增强步态质量奖励（鼓励抬脚动作）
+    marching_foot_clearance = RewTerm(
+        func=mdp.feet_air_time,
+        weight=1.5,  # 比普通模式更高的权重
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll_link"),
+            "command_name": "base_velocity",
+            "threshold": 0.3,  # 较低的阈值，鼓励更频繁的抬脚
+        },
+    )
+
+    # 鼓励关节运动（避免完全静止）
+    marching_joint_motion = RewTerm(
+        func=mdp.joint_vel_magnitude,
+        weight=0.1,  # 小的正向奖励，鼓励腿部运动
+        params={},
     )
 
 
@@ -499,11 +539,12 @@ class UnifiedEnvCfg(ManagerBasedRLEnvCfg):
     """
     统一条件策略环境配置
 
-    训练一个能处理4种模式的策略：
+    训练一个能处理5种模式的策略：
         - 模式0: 平地盲走
         - 模式1: 平地带传感器
         - 模式2: 楼梯盲爬
         - 模式3: 楼梯带传感器
+        - 模式4: 原地踏步（强调步态质量）
     """
 
     scene: UnifiedSceneCfg = UnifiedSceneCfg(num_envs=4096, env_spacing=2.5)

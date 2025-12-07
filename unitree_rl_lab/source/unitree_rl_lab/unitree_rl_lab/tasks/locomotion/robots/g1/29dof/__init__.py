@@ -69,7 +69,7 @@ gym.register(
 # ============================================================================
 #                       统一条件策略任务
 # ============================================================================
-# 一个策略同时学习4种模式，通过 mode_flag 控制行为
+# 一个策略同时学习5种模式，通过 mode_flag 控制行为
 # 部署时可智能切换模式，无需加载多个模型
 # ============================================================================
 gym.register(
@@ -79,6 +79,22 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": f"{__name__}.unified_env_cfg:UnifiedEnvCfg",
         "play_env_cfg_entry_point": f"{__name__}.unified_env_cfg:UnifiedPlayEnvCfg",
+        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
+    },
+)
+
+# ============================================================================
+#                       原地踏步任务
+# ============================================================================
+# 训练机器人原地踏步：保持位置不变、不自转，产生明显的步态动作
+# ============================================================================
+gym.register(
+    id="Unitree-G1-29dof-Marching",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.marching_env_cfg:MarchingEnvCfg",
+        "play_env_cfg_entry_point": f"{__name__}.marching_env_cfg:MarchingPlayEnvCfg",
         "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
     },
 )
