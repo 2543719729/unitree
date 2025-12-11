@@ -287,11 +287,11 @@ class MarchingObservationsCfg:
             noise=Unoise(n_min=-0.2, n_max=0.2),
         )
 
-        base_lin_vel = ObsTerm(
-            func=mdp.base_lin_vel,
-            scale=1.0,
-            noise=Unoise(n_min=-0.5, n_max=0.5),
-        )
+        # base_lin_vel = ObsTerm(
+        #     func=mdp.base_lin_vel,
+        #     scale=1.0,
+        #     noise=Unoise(n_min=-0.5, n_max=0.5),
+        # )
 
         projected_gravity = ObsTerm(
             func=mdp.projected_gravity,
