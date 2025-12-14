@@ -524,7 +524,7 @@ class StairTerminationsCfg:
     # 高度过低终止 - 楼梯上调整阈值
     base_height = DoneTerm(
         func=mdp.root_height_below_minimum,
-        params={"minimum_height": 0.25},  # 略微提高，楼梯上更容易跌倒
+        params={"minimum_height": 0.35},  # 略微提高，楼梯上更容易跌倒
     )
 
     # 姿态异常终止

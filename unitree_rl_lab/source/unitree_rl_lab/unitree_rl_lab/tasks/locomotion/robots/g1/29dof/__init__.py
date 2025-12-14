@@ -41,6 +41,12 @@ gym.register(
 # ============================================================================
 # 阶段3: 盲爬楼梯（楼梯，无 height_scan）
 # ============================================================================
+# 使用专用的 StairBlindPPORunnerCfg 配置，针对盲爬任务优化：
+#   - 更长轨迹 (48步) 覆盖完整攀爬周期
+#   - 更大网络 [512,256,256,128] 学习隐式地形信息
+#   - 更高折扣因子 (0.995) 重视长期回报
+#   - 更保守更新 (clip=0.18, lr=5e-4) 避免策略崩溃
+# ============================================================================
 gym.register(
     id="Unitree-G1-29dof-Stair-Blind",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
@@ -48,7 +54,7 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": f"{__name__}.stair_env_cfg:StairBlindEnvCfg",
         "play_env_cfg_entry_point": f"{__name__}.stair_env_cfg:StairBlindPlayEnvCfg",
-        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:BasePPORunnerCfg",
+        "rsl_rl_cfg_entry_point": f"unitree_rl_lab.tasks.locomotion.agents.rsl_rl_ppo_cfg:StairBlindPPORunnerCfg",
     },
 )
 
