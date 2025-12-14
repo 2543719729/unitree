@@ -182,7 +182,7 @@ class StairEventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
-            "mass_distribution_params": (-1.0, 3.0),
+            "mass_distribution_params": (-2.0, 5.0),
             "operation": "add",
         },
     )
@@ -228,15 +228,15 @@ class StairEventCfg:
     )
 
     # ======================== 间隔事件 ========================
-    # 楼梯上减小推力干扰
+    # 楼梯上减小推力干扰（盲爬模式更保守，因为没有地形感知）
     push_robot = EventTerm(
         func=mdp.push_by_setting_velocity,
         mode="interval",
-        interval_range_s=(6.0, 10.0),  # 降低推力频率
+        interval_range_s=(8.0, 12.0),  # 降低推力频率（比带传感器模式更宽松）
         params={
             "velocity_range": {
-                "x": (-0.4, 0.4),  # 减小推力强度
-                "y": (-0.4, 0.4),
+                "x": (-0.3, 0.3),  # 减小推力强度（比带传感器模式更小）
+                "y": (-0.3, 0.3),
             }
         },
     )
@@ -328,14 +328,14 @@ class StairBlindObservationsCfg:
         # 关节位置偏差
         joint_pos_rel = ObsTerm(
             func=mdp.joint_pos_rel,
-            noise=Unoise(n_min=-0.01, n_max=0.01),
+            noise=Unoise(n_min=-0.02, n_max=0.02),
         )
 
         # 关节速度
         joint_vel_rel = ObsTerm(
             func=mdp.joint_vel_rel,
             scale=0.05,
-            noise=Unoise(n_min=-1.5, n_max=1.5),
+            noise=Unoise(n_min=-0.1, n_max=0.1),
         )
 
         # 上一步动作
@@ -400,7 +400,7 @@ class StairBlindRewardsCfg:
         params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
 
-    alive = RewTerm(func=mdp.is_alive, weight=0.15)
+    alive = RewTerm(func=mdp.is_alive, weight=1.5)
 
     # 向上进展奖励 - 楼梯任务核心奖励
     upward_progress = RewTerm(
@@ -410,15 +410,15 @@ class StairBlindRewardsCfg:
 
     # ====================== 基座运动正则化 ======================
     # 降低 Z 轴速度惩罚，因为上楼梯时 Z 轴速度自然会增加
-    base_linear_velocity = RewTerm(func=mdp.lin_vel_z_l2, weight=-0.5)
-    base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
+    base_linear_velocity = RewTerm(func=mdp.lin_vel_z_l2, weight=-0.5)#惩罚Z轴线速度（上下颠簸
+    base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)#惩罚X/Y轴角速度（左右摇晃）
 
     # ====================== 关节运动正则化 ======================
-    joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)
-    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
-    dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-5.0)
-    energy = RewTerm(func=mdp.energy, weight=-2e-5)
+    joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)  #惩罚关节速度
+    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7) #惩罚关节加速度
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05) #惩罚动作率
+    dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-5.0) #惩罚关节位置限制
+    energy = RewTerm(func=mdp.energy, weight=-2e-5) #惩罚能量消耗
 
     # ====================== 关节偏差惩罚 ======================
     joint_deviation_arms = RewTerm(
@@ -471,7 +471,7 @@ class StairBlindRewardsCfg:
         func=mdp.feet_gait,
         weight=0.5,
         params={
-            "period": 0.8,
+            "period": 1.0,
             "offset": [0.0, 0.5],
             "threshold": 0.55,
             "command_name": "base_velocity",
@@ -496,7 +496,7 @@ class StairBlindRewardsCfg:
         params={
             "std": 0.05,
             "tanh_mult": 2.0,
-            "target_height": 0.18,  # 从 0.23 降低到 0.18，更稳定
+            "target_height": 0.22,  # 从 0.23 降低到 0.22，以适应楼梯高度
             "asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
         },
     )
@@ -539,9 +539,35 @@ class StairTerminationsCfg:
 # ============================================================================
 @configclass
 class StairCurriculumCfg:
-    """楼梯任务课程学习配置"""
+    """
+    盲爬楼梯任务课程学习配置
+    
+    使用 terrain_levels_climb 替代原版的 terrain_levels_vel，
+    因为盲爬任务需要考虑高度增益而非仅仅水平距离。
+    
+    课程学习策略：
+        - terrain_levels: 基于攀爬进度（前进距离 + 高度增益）调整地形难度
+        - lin_vel_cmd_levels: 基于速度跟踪表现调整速度命令范围
+    
+    参数说明：
+        - height_weight=2.0: 高度增益权重，楼梯任务中高度更重要
+        - forward_weight=1.0: 前进距离权重
+        - upgrade_threshold_ratio=0.3: 升级阈值为地形尺寸的 30%
+        - downgrade_threshold=0.5: 降级阈值为 0.5 米（绝对值）
+    """
 
-    terrain_levels = CurrTerm(func=mdp.terrain_levels_vel)
+    # 使用基于攀爬进度的课程学习（盲爬楼梯专用）
+    terrain_levels = CurrTerm(
+        func=mdp.terrain_levels_climb,
+        params={
+            "height_weight": 2.0,           # 高度增益权重（楼梯任务中高度更重要）
+            "forward_weight": 1.0,          # 前进距离权重
+            "upgrade_threshold_ratio": 0.3, # 升级阈值为地形尺寸的 30%
+            "downgrade_threshold": 0.5,     # 降级阈值为 0.5 米（绝对值）
+        }
+    )
+    
+    # 速度命令课程学习（保持不变）
     lin_vel_cmd_levels = CurrTerm(func=mdp.lin_vel_cmd_levels)
 
 
@@ -578,112 +604,118 @@ class StairBlindEnvCfg(ManagerBasedRLEnvCfg):
     #课程学习配置类
     curriculum: StairCurriculumCfg = StairCurriculumCfg()
 
-def __post_init__(self):
-    """
-    后初始化方法 - 在配置对象创建后自动调用
-    
-    该方法用于设置仿真的核心参数，包括：
-        1. 控制频率和时间步长
-        2. Episode 时长
-        3. 物理引擎参数
-        4. 传感器更新周期
-        5. 课程学习开关
-    
-    这些参数会覆盖父类的默认值，确保环境按预期运行。
-    """
-    
-    # ======================== 控制频率配置 ========================
-    # decimation: 降采样因子，控制策略执行频率与物理仿真频率的比例
-    # 
-    # 计算公式：策略频率 = 仿真频率 / decimation
-    # 
-    # 当前配置：
-    #   - 仿真频率 = 1 / 0.005 = 200 Hz
-    #   - 策略频率 = 200 / 4 = 50 Hz
-    # 
-    # 含义：物理仿真每秒运行200次，但策略网络每秒只执行50次
-    #       每次策略输出的动作会被保持4个仿真步
-    self.decimation = 4
-    
-    # ======================== Episode 时长配置 ========================
-    # episode_length_s: 每个训练 Episode 的最大时长（秒）
-    # 
-    # 计算：
-    #   - 每个策略步的时间 = sim.dt × decimation = 0.005 × 4 = 0.02 秒
-    #   - 最大步数 = episode_length_s (每个训练 Episode 的最大时长（秒）)/ 0.02 = 20.0 / 0.02 = 1000 步
-    # 
-    # 影响：
-    #   - 值越大，机器人有更多时间完成任务
-    #   - 值越小，训练迭代更快，但可能学不到长期行为
-    self.episode_length_s = 20.0
-    
-    # ======================== 物理仿真配置 ========================
-    # sim.dt: 物理仿真的时间步长（秒）
-    # 
-    # 当前值 0.005 秒 = 5 毫秒，对应 200 Hz 的仿真频率
-    # 
-    # 影响：
-    #   - 值越小，物理仿真越精确，但计算量越大
-    #   - 值越大，仿真越快，但可能出现物理不稳定（穿透、抖动）
-    # 
-    # 推荐范围：0.001 ~ 0.01 秒（100 ~ 1000 Hz）
-    # 机器人仿真通常使用 0.005 秒（200 Hz）
-    self.sim.dt = 0.005
-    
-    # sim.physics_material: 默认物理材质
-    # 
-    # 将地形的物理材质（摩擦系数、弹性系数）设置为仿真的默认材质
-    # 这确保了机器人与地面接触时使用正确的物理属性
-    self.sim.physics_material = self.scene.terrain.physics_material
-    
-    # sim.physx.gpu_max_rigid_patch_count: PhysX GPU 刚体 patch 数量上限
-    # 
-    # 计算：10 × 2^15 = 10 × 32768 = 327,680
-    # 
-    # 作用：
-    #   - 控制 GPU 上可以同时处理的刚体接触点数量
-    #   - 大规模并行仿真（如 4096 个环境）需要更大的值
-    # 
-    # 如果出现 "GPU rigid body patch count exceeded" 错误，需要增大此值
-    self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
-    
-    # ======================== 传感器更新周期配置 ========================
-    # contact_forces.update_period: 接触力传感器的更新周期
-    # 
-    # 设置为 sim.dt，表示每个仿真步都更新接触力数据
-    # 即接触力传感器以 200 Hz 的频率更新
-    # 
-    # 这对于步态检测和碰撞惩罚非常重要，需要高频率的接触信息
-    self.scene.contact_forces.update_period = self.sim.dt
-    
-    # 注意：盲爬模式不使用 height_scanner（高度扫描器）
-    # 如果有 height_scanner，通常设置为：
-    # self.scene.height_scanner.update_period = self.decimation * self.sim.dt
-    # 即以策略频率（50 Hz）更新，因为高度扫描不需要那么高的频率
-    
-    # ======================== 课程学习配置 ========================
-    # 检查是否启用了地形难度课程学习
-    # 
-    # 课程学习的作用：
-    #   - 训练初期使用简单地形（如平地）
-    #   - 随着策略性能提升，自动切换到更难的地形
-    #   - 帮助策略逐步学习，避免一开始就面对困难任务
-    # 
-    # 逻辑说明：
-    #   1. 检查 curriculum 配置中是否定义了 terrain_levels
-    #   2. 如果定义了，启用地形生成器的课程学习功能
-    #   3. 如果没有定义，关闭课程学习，使用固定难度
-    if getattr(self.curriculum, "terrain_levels", None) is not None:
-        # 如果配置了地形难度课程
-        if self.scene.terrain.terrain_generator is not None:
-            # 启用地形生成器的课程学习模式
-            # 地形生成器会根据机器人性能自动调整难度等级
-            self.scene.terrain.terrain_generator.curriculum = True
-    else:
-        # 如果没有配置地形难度课程
-        if self.scene.terrain.terrain_generator is not None:
-            # 关闭课程学习，使用固定的地形难度分布
-            self.scene.terrain.terrain_generator.curriculum = False
+    def __post_init__(self):
+        """
+        后初始化方法 - 在配置对象创建后自动调用
+        
+        该方法用于设置仿真的核心参数，包括：
+            1. 控制频率和时间步长
+            2. Episode 时长
+            3. 物理引擎参数
+            4. 传感器更新周期
+            5. 课程学习开关
+        
+        这些参数会覆盖父类的默认值，确保环境按预期运行。
+        """
+        
+        # ======================== 控制频率配置 ========================
+        # decimation: 降采样因子，控制策略执行频率与物理仿真频率的比例
+        #
+        # 计算公式：策略频率 = 仿真频率 / decimation
+        #
+        # 当前配置：
+        #   - 仿真频率 = 1 / 0.005 = 200 Hz
+        #   - 策略频率 = 200 / 4 = 50 Hz
+        #
+        # 含义：物理仿真每秒运行200次，但策略网络每秒只执行50次
+        #       每次策略输出的动作会被保持4个仿真步
+        self.decimation = 4
+        
+        # ======================== Episode 时长配置 ========================
+        # episode_length_s: 每个训练 Episode 的最大时长（秒）
+        #
+        # 计算：
+        #   - 每个策略步的时间 = sim.dt × decimation = 0.005 × 4 = 0.02 秒
+        #   - 最大步数 = episode_length_s / 0.02 = 20.0 / 0.02 = 1000 步
+        #
+        # 影响：
+        #   - 值越大，机器人有更多时间完成任务
+        #   - 值越小，训练迭代更快，但可能学不到长期行为
+        self.episode_length_s = 20.0
+        
+        # ======================== 物理仿真配置 ========================
+        # sim.dt: 物理仿真的时间步长（秒）
+        #
+        # 当前值 0.005 秒 = 5 毫秒，对应 200 Hz 的仿真频率
+        #
+        # 影响：
+        #   - 值越小，物理仿真越精确，但计算量越大
+        #   - 值越大，仿真越快，但可能出现物理不稳定（穿透、抖动）
+        #
+        # 推荐范围：0.001 ~ 0.01 秒（100 ~ 1000 Hz）
+        # 机器人仿真通常使用 0.005 秒（200 Hz）
+        self.sim.dt = 0.005
+        
+        # sim.render_interval: 渲染间隔
+        #
+        # 设置为 decimation，表示每 decimation 个仿真步渲染一次
+        # 即渲染频率与策略频率相同（50 Hz）
+        self.sim.render_interval = self.decimation
+        
+        # sim.physics_material: 默认物理材质
+        #
+        # 将地形的物理材质（摩擦系数、弹性系数）设置为仿真的默认材质
+        # 这确保了机器人与地面接触时使用正确的物理属性
+        self.sim.physics_material = self.scene.terrain.physics_material
+        
+        # sim.physx.gpu_max_rigid_patch_count: PhysX GPU 刚体 patch 数量上限
+        #
+        # 计算：10 × 2^15 = 10 × 32768 = 327,680
+        #
+        # 作用：
+        #   - 控制 GPU 上可以同时处理的刚体接触点数量
+        #   - 大规模并行仿真（如 4096 个环境）需要更大的值
+        #
+        # 如果出现 "GPU rigid body patch count exceeded" 错误，需要增大此值
+        self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
+        
+        # ======================== 传感器更新周期配置 ========================
+        # contact_forces.update_period: 接触力传感器的更新周期
+        #
+        # 设置为 sim.dt，表示每个仿真步都更新接触力数据
+        # 即接触力传感器以 200 Hz 的频率更新
+        #
+        # 这对于步态检测和碰撞惩罚非常重要，需要高频率的接触信息
+        self.scene.contact_forces.update_period = self.sim.dt
+        
+        # 注意：盲爬模式不使用 height_scanner（高度扫描器）
+        # 如果有 height_scanner，通常设置为：
+        # self.scene.height_scanner.update_period = self.decimation * self.sim.dt
+        # 即以策略频率（50 Hz）更新，因为高度扫描不需要那么高的频率
+        
+        # ======================== 课程学习配置 ========================
+        # 检查是否启用了地形难度课程学习
+        #
+        # 课程学习的作用：
+        #   - 训练初期使用简单地形（如平地）
+        #   - 随着策略性能提升，自动切换到更难的地形
+        #   - 帮助策略逐步学习，避免一开始就面对困难任务
+        #
+        # 逻辑说明：
+        #   1. 检查 curriculum 配置中是否定义了 terrain_levels
+        #   2. 如果定义了，启用地形生成器的课程学习功能
+        #   3. 如果没有定义，关闭课程学习，使用固定难度
+        if getattr(self.curriculum, "terrain_levels", None) is not None:
+            # 如果配置了地形难度课程
+            if self.scene.terrain.terrain_generator is not None:
+                # 启用地形生成器的课程学习模式
+                # 地形生成器会根据机器人性能自动调整难度等级
+                self.scene.terrain.terrain_generator.curriculum = True
+        else:
+            # 如果没有配置地形难度课程
+            if self.scene.terrain.terrain_generator is not None:
+                # 关闭课程学习，使用固定的地形难度分布
+                self.scene.terrain.terrain_generator.curriculum = False
 
 
 # 用来演示的配置
