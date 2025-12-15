@@ -388,6 +388,83 @@ def upward_progress(
     return reward + progress_bonus
 
 
+def base_height_relative(
+    env: ManagerBasedRLEnv,
+    target_offset: float = 0.0,
+    only_penalize_drop: bool = True,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """
+    相对高度惩罚：相对于 episode 开始时的高度
+    
+    修复版本：
+    - 使用 episode_length_buf == 1 检测新 episode（修复重置时机问题）
+    - 可选只惩罚高度下降（适合楼梯任务）
+    
+    设计原理：
+        - 初始高度 = episode 第一步时的机器人高度
+        - 目标高度 = 初始高度 + target_offset
+        - only_penalize_drop=True: 只惩罚下降（蹲下/摔倒），不惩罚上升（爬楼梯）
+        - only_penalize_drop=False: 惩罚任何偏离
+    
+    Args:
+        env: 环境实例
+        target_offset: 相对于初始高度的目标偏移（正值表示希望更高）
+        only_penalize_drop: 是否只惩罚高度下降（True=只惩罚蹲下/摔倒，适合楼梯任务）
+        asset_cfg: 机器人资产配置
+    
+    Returns:
+        惩罚张量，形状为 (num_envs,)
+    
+    Example:
+        # 楼梯任务：只惩罚下降
+        base_height = RewTerm(
+            func=mdp.base_height_relative,
+            weight=-2.0,
+            params={"target_offset": 0.0, "only_penalize_drop": True},
+        )
+        
+        # 平地任务：惩罚任何偏离
+        base_height = RewTerm(
+            func=mdp.base_height_relative,
+            weight=-2.0,
+            params={"target_offset": 0.0, "only_penalize_drop": False},
+        )
+    """
+    asset: RigidObject = env.scene[asset_cfg.name]
+    current_height = asset.data.root_pos_w[:, 2]
+    
+    # 初始化参考高度
+    if not hasattr(env, "_base_height_reference"):
+        env._base_height_reference = current_height.clone()
+    
+    # 形状不一致时进行重置（例如环境数量变化时）
+    if env._base_height_reference.shape != current_height.shape:
+        env._base_height_reference = current_height.clone()
+    
+    # 使用 episode_length_buf == 1 检测新 episode 的第一步
+    # 注意：在奖励函数被调用时，episode_length_buf 已经 +1 了
+    # 所以 == 1 表示这是重置后的第一步，此时机器人已经处于正确的初始位置
+    new_episode_mask = env.episode_length_buf == 1
+    if torch.any(new_episode_mask):
+        env._base_height_reference = torch.where(
+            new_episode_mask, current_height, env._base_height_reference
+        )
+    
+    # 计算目标高度
+    target_height = env._base_height_reference + target_offset
+    
+    if only_penalize_drop:
+        # 只惩罚低于目标高度的情况（蹲下/摔倒）
+        # 不惩罚高于目标高度的情况（爬楼梯）
+        height_drop = torch.clamp(target_height - current_height, min=0.0)
+        return torch.square(height_drop)
+    else:
+        # 惩罚任何偏离目标高度的情况
+        height_error = current_height - target_height
+        return torch.square(height_error)
+
+
 def base_height_adaptive(
     env: ManagerBasedRLEnv,
     target_height: float,

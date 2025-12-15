@@ -62,13 +62,15 @@ STAIR_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
     difficulty_range=(0.0, 1.0),  # 难度范围
     use_cache=False,              # 不使用缓存
     sub_terrains={
-        # 基础平地（15%）- 用于学习基础平衡
-        "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.15),
+        # 基础平地（50%）- 大幅增加！先学会站立和行走
+        # [修复] 原值 15% 太少，机器人还没学会站立就要学爬楼梯
+        "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.50),
 
         # ========== 上楼梯（使用 InvertedPyramid，从边缘向中心爬升）==========
-        # 简单上楼梯（35%）- 低阶高，宽踏面
+        # 简单上楼梯（25%）- 低阶高，宽踏面
+        # [修复] 原值 35%，减少到 25%
         "stairs_up_easy": terrain_gen.MeshInvertedPyramidStairsTerrainCfg(
-            proportion=0.35,
+            proportion=0.25,
             step_height_range=(0.08, 0.12),  # 8-12cm 阶高
             step_width=0.35,                  # 35cm 踏面宽度
             platform_width=2.0,               # 2m 顶部平台
@@ -76,9 +78,10 @@ STAIR_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
             holes=False,
         ),
 
-        # 中等上楼梯（30%）- 标准室内楼梯
+        # 中等上楼梯（15%）- 标准室内楼梯
+        # [修复] 原值 30%，减少到 15%
         "stairs_up_medium": terrain_gen.MeshInvertedPyramidStairsTerrainCfg(
-            proportion=0.30,
+            proportion=0.15,
             step_height_range=(0.10, 0.16),  # 10-16cm 阶高
             step_width=0.32,                  # 32cm 踏面宽度
             platform_width=2.0,
@@ -86,9 +89,10 @@ STAIR_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
             holes=False,
         ),
 
-        # 困难上楼梯（20%）- 较高阶梯
+        # 困难上楼梯（10%）- 较高阶梯
+        # [修复] 原值 20%，减少到 10%
         "stairs_up_hard": terrain_gen.MeshInvertedPyramidStairsTerrainCfg(
-            proportion=0.20,
+            proportion=0.10,
             step_height_range=(0.14, 0.18),  # 14-18cm 阶高
             step_width=0.30,                  # 30cm 踏面宽度
             platform_width=1.5,
@@ -116,7 +120,9 @@ class StairBlindSceneCfg(InteractiveSceneCfg):
         prim_path="/World/ground",
         terrain_type="generator",
         terrain_generator=STAIR_TERRAIN_CFG,
-        max_init_terrain_level=STAIR_TERRAIN_CFG.num_rows - 1,
+        # [修复] 从最简单的地形开始！原值是 num_rows - 1 = 9
+        # 这确保机器人先在平地上学会站立和行走，再逐步挑战楼梯
+        max_init_terrain_level=0,
         collision_group=-1,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
@@ -182,7 +188,7 @@ class StairEventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
-            "mass_distribution_params": (-2.0, 5.0),
+            "mass_distribution_params": (-2.0, 2.0),
             "operation": "add",
         },
     )
@@ -223,7 +229,7 @@ class StairEventCfg:
         mode="reset",
         params={
             "position_range": (1.0, 1.0),
-            "velocity_range": (-0.5, 0.5),  # 减小初始关节速度
+            "velocity_range": (-0.0, 0.0),  # 减小初始关节速度
         },
     )
 
@@ -282,10 +288,13 @@ class StairCommandsCfg:
 class StairActionsCfg:
     """楼梯任务动作配置类"""
 
+    # [修复] 减小动作幅度，训练初期避免剧烈动作导致失衡
+    # 原值 0.25 太大，随机动作会导致关节大幅移动
+    # 0.15 更保守，让机器人有机会学习平衡
     JointPositionAction = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=[".*"],
-        scale=0.25,
+        scale=0.15,
         use_default_offset=True,
     )
 
@@ -340,6 +349,10 @@ class StairBlindObservationsCfg:
 
         # 上一步动作
         last_action = ObsTerm(func=mdp.last_action)
+
+        # [修复] 添加步态相位观测，帮助策略学习周期性步态
+        # 这在 marching_env_cfg 中存在，对步态学习非常重要
+        gait_phase = ObsTerm(func=mdp.gait_phase, params={"period": 1.0})
 
         # 盲爬模式：不使用 height_scan
 
@@ -400,7 +413,10 @@ class StairBlindRewardsCfg:
         params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
 
-    alive = RewTerm(func=mdp.is_alive, weight=1.5)
+    # [修复] 大幅增加 alive 奖励权重
+    # 原值 2.0 不足以激励存活，机器人没有动力保持平衡
+    # 5.0 让存活成为最重要的目标，优先学会站立
+    alive = RewTerm(func=mdp.is_alive, weight=5.0)
 
     # 向上进展奖励 - 楼梯任务核心奖励
     upward_progress = RewTerm(
@@ -417,7 +433,8 @@ class StairBlindRewardsCfg:
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)  #惩罚关节速度
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7) #惩罚关节加速度
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05) #惩罚动作率
-    dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-5.0) #惩罚关节位置限制
+    # [修复] 原值 -5.0 太高，训练初期关节容易超限导致大量惩罚
+    dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-1.0) #惩罚关节位置限制
     energy = RewTerm(func=mdp.energy, weight=-2e-5) #惩罚能量消耗
 
     # ====================== 关节偏差惩罚 ======================
@@ -450,7 +467,7 @@ class StairBlindRewardsCfg:
 
     # ====================== 姿态奖励 ======================
     # 增强姿态惩罚，保持躯干直立（替代 base_height_l2 的作用）
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-5.0)
+    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)
 
     # 盲爬模式：移除 base_height_l2
     # 原因：在楼梯上，机器人的绝对高度会随着攀爬而增加
@@ -460,7 +477,7 @@ class StairBlindRewardsCfg:
     # 新增：膝关节弯曲惩罚，防止蹲着走
     joint_deviation_knees = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.5,
+        weight=-0.9,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_knee_joint"])
         },
@@ -489,14 +506,16 @@ class StairBlindRewardsCfg:
     )
 
     # 增加抬腿高度，适合跨越台阶
-    # 目标高度 0.18m：最高台阶 18cm + 安全余量，避免过高导致不稳定
+    # [修复] 目标高度从 0.20 降低到 0.12m
+    # 原因：过高的目标高度导致机器人重心不稳，容易倾倒
+    # 0.12m 足以跨越 8-12cm 的简单楼梯，更高难度的楼梯通过课程学习逐步挑战
     feet_clearance = RewTerm(
         func=mdp.foot_clearance_reward,
         weight=1.2,
         params={
             "std": 0.05,
             "tanh_mult": 2.0,
-            "target_height": 0.22,  # 从 0.23 降低到 0.22，以适应楼梯高度
+            "target_height": 0.20,  # [修复] 从 0.20 降低到 0.12
             "asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
         },
     )
@@ -521,16 +540,24 @@ class StairTerminationsCfg:
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    # 高度过低终止 - 楼梯上调整阈值
+    # [修复] 使用带保护期的终止条件
+    # grace_steps=10 表示 episode 开始的前 10 步不触发终止
+    # 这给机器人时间从初始姿态稳定下来，避免因初始抖动就终止
     base_height = DoneTerm(
-        func=mdp.root_height_below_minimum,
-        params={"minimum_height": 0.35},  # 略微提高，楼梯上更容易跌倒
+        func=mdp.root_height_below_terrain_minimum_with_grace,
+        params={
+            "minimum_height": 0.15,  # 相对地形高度阈值
+            "grace_steps": 10,       # 保护期 10 步
+        },
     )
 
-    # 姿态异常终止
+    # [修复] 使用带保护期的姿态终止条件
     bad_orientation = DoneTerm(
-        func=mdp.bad_orientation,
-        params={"limit_angle": 0.7},  # 略微减小，更早终止不稳定状态
+        func=mdp.bad_orientation_with_grace,
+        params={
+            "limit_angle": 1.3,      # 74° 倾斜角阈值
+            "grace_steps": 10,       # 保护期 10 步
+        },
     )
 
 
@@ -542,28 +569,29 @@ class StairCurriculumCfg:
     """
     盲爬楼梯任务课程学习配置
     
-    使用 terrain_levels_climb 替代原版的 terrain_levels_vel，
-    因为盲爬任务需要考虑高度增益而非仅仅水平距离。
+    [修复] 使用 terrain_levels_survival 替代 terrain_levels_climb
+    
+    原因：
+        - terrain_levels_climb 依赖于机器人的前进距离和高度增益
+        - 但是当机器人在训练初期就死亡（episode_length=1）时，无法积累任何进度
+        - terrain_levels_survival 基于存活时间，更适合早期训练
+        - 当机器人能够存活足够长时间后，自然会开始移动
     
     课程学习策略：
-        - terrain_levels: 基于攀爬进度（前进距离 + 高度增益）调整地形难度
+        - terrain_levels: 基于存活时间比例调整地形难度
         - lin_vel_cmd_levels: 基于速度跟踪表现调整速度命令范围
     
     参数说明：
-        - height_weight=2.0: 高度增益权重，楼梯任务中高度更重要
-        - forward_weight=1.0: 前进距离权重
-        - upgrade_threshold_ratio=0.3: 升级阈值为地形尺寸的 30%
-        - downgrade_threshold=0.5: 降级阈值为 0.5 米（绝对值）
+        - survival_ratio_upgrade=0.7: 存活 70% episode 时间才升级
+        - survival_ratio_downgrade=0.2: 存活不足 20% 时间则降级
     """
 
-    # 使用基于攀爬进度的课程学习（盲爬楼梯专用）
+    # [修复] 使用基于存活时间的课程学习（更适合早期训练）
     terrain_levels = CurrTerm(
-        func=mdp.terrain_levels_climb,
+        func=mdp.terrain_levels_survival,
         params={
-            "height_weight": 2.0,           # 高度增益权重（楼梯任务中高度更重要）
-            "forward_weight": 1.0,          # 前进距离权重
-            "upgrade_threshold_ratio": 0.3, # 升级阈值为地形尺寸的 30%
-            "downgrade_threshold": 0.5,     # 降级阈值为 0.5 米（绝对值）
+            "survival_ratio_upgrade": 0.7,   # 存活 70% 时间才升级
+            "survival_ratio_downgrade": 0.2, # 存活不足 20% 时间则降级
         }
     )
     

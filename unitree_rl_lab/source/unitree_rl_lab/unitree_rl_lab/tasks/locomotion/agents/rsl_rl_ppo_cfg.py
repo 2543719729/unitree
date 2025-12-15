@@ -115,7 +115,7 @@ class StairBlindPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     #   - 稳定阶段: ~5 步
     #
     # 设置为 48 步可覆盖完整周期 + 后续动作衔接
-    num_steps_per_env = 48
+    num_steps_per_env = 32
     
     # max_iterations: 最大训练迭代次数
     # 盲爬任务比平地行走更复杂，需要更多迭代才能收敛
@@ -165,7 +165,7 @@ class StairBlindPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         # -------------------- 价值函数相关 --------------------
         # value_loss_coef: 价值函数损失系数
         # 1.0 是标准值，确保 Critic 学习充分
-        value_loss_coef=1.0,
+        value_loss_coef=1.1,
         
         # use_clipped_value_loss: 使用裁剪的价值损失
         # 类似于策略裁剪，提高训练稳定性
@@ -179,7 +179,7 @@ class StairBlindPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         #
         # 原因：盲爬任务中，激进的策略更新可能导致机器人摔倒
         #       更保守的更新可以避免策略崩溃
-        clip_param=0.18,
+        clip_param=0.2,
         
         # entropy_coef: 熵正则化系数
         #
@@ -213,7 +213,7 @@ class StairBlindPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         #   1. 避免策略剧烈变化导致的不稳定
         #   2. 更细致地优化动作质量
         #   3. 配合自适应调度，让 KL 约束更有效
-        learning_rate=5.0e-4,
+        learning_rate=1e-3,
         
         # schedule: 学习率调度策略
         # "adaptive" 基于 KL 散度自动调整学习率：
