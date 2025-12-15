@@ -569,31 +569,25 @@ class StairCurriculumCfg:
     """
     盲爬楼梯任务课程学习配置
     
-    [修复] 使用 terrain_levels_survival 替代 terrain_levels_climb
+    [升级] 使用自适应课程学习 adaptive_terrain_levels
     
-    原因：
-        - terrain_levels_climb 依赖于机器人的前进距离和高度增益
-        - 但是当机器人在训练初期就死亡（episode_length=1）时，无法积累任何进度
-        - terrain_levels_survival 基于存活时间，更适合早期训练
-        - 当机器人能够存活足够长时间后，自然会开始移动
+    功能：
+        - 自动检测训练阶段（基于 episode_length 和 terrain_level）
+        - 动态调整奖励权重和终止条件参数
+        - 根据阶段自动切换底层课程策略（survival/climb）
     
-    课程学习策略：
-        - terrain_levels: 基于存活时间比例调整地形难度
-        - lin_vel_cmd_levels: 基于速度跟踪表现调整速度命令范围
+    训练阶段：
+        Stage 0: 初始探索期 (mean_episode_length < 100)
+        Stage 1: 站立稳定期 (100 ≤ mean_episode_length < 300)
+        Stage 2: 行走学习期 (300 ≤ mean_episode_length < 600)
+        Stage 3: 楼梯适应期 (mean_episode_length ≥ 600, terrain_level < 3)
+        Stage 4: 楼梯精通期 (mean_episode_length ≥ 600, terrain_level ≥ 3)
     
-    参数说明：
-        - survival_ratio_upgrade=0.7: 存活 70% episode 时间才升级
-        - survival_ratio_downgrade=0.2: 存活不足 20% 时间则降级
+    详细规划文档：docs/adaptive_training_plan.md
     """
 
-    # [修复] 使用基于存活时间的课程学习（更适合早期训练）
-    terrain_levels = CurrTerm(
-        func=mdp.terrain_levels_survival,
-        params={
-            "survival_ratio_upgrade": 0.7,   # 存活 70% 时间才升级
-            "survival_ratio_downgrade": 0.2, # 存活不足 20% 时间则降级
-        }
-    )
+    # [升级] 使用自适应课程学习（自动检测阶段并调整参数）
+    terrain_levels = CurrTerm(func=mdp.adaptive_terrain_levels)
     
     # 速度命令课程学习（保持不变）
     lin_vel_cmd_levels = CurrTerm(func=mdp.lin_vel_cmd_levels)

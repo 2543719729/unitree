@@ -32,3 +32,12 @@ from .events import *  # noqa: F401, F403
 from .observations import *  # noqa: F401, F403
 from .rewards import *  # noqa: F401, F403
 from .terminations import *  # noqa: F401, F403
+from .adaptive_curriculum import (  # noqa: F401
+    adaptive_terrain_levels,
+    get_current_stage,
+    get_stage_name,
+    reset_adaptive_state,
+    get_ppo_params,
+    update_ppo_params,
+    STAGE_CONFIGS,
+)

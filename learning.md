@@ -11,3 +11,8 @@ clip_param: 0.2
 learning_rate: 1e-3
 entropy_coef: 0.01
 GAE lambda: 0.95
+
+ python .\scripts\rsl_rl\train.py --task Unitree-G1-29dof-Stair-Blind
+
+
+ Total Loss = Policy Loss - entropy_coef × Entropy + value_loss_coef × Value Loss
