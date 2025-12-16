@@ -149,10 +149,13 @@ from unitree_rl_lab.tasks.locomotion.mdp import (
     get_ppo_params,
     update_ppo_params,
     reset_adaptive_state,
+    set_num_steps_per_env,
     init_adaptive_state_from_metrics,
     get_adaptive_state_dict,
     load_adaptive_state_dict,
     apply_stage_params,
+    get_current_params_for_logging,
+    format_adaptive_params_log,
 )
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -205,6 +208,9 @@ def adaptive_learn(
     if runner.is_distributed:
         print(f"Synchronizing parameters for rank {runner.gpu_global_rank}...")
         alg.broadcast_parameters()
+    
+    # [Bug Fix] 设置 num_steps_per_env，用于 iteration 估算
+    set_num_steps_per_env(runner.num_steps_per_env)
     
     # 跟踪上一次的阶段
     last_stage = get_current_stage()
@@ -261,35 +267,18 @@ def adaptive_learn(
         learn_time = stop - start
         runner.current_learning_iteration = it
         
-        # ==================== 自适应 PPO 参数状态打印 ====================
-        current_stage = get_current_stage()
-        ppo_params = get_ppo_params(current_stage)
+        # ==================== 自适应参数状态打印 ====================
+        # 获取当前自适应参数快照
+        adaptive_params = get_current_params_for_logging(env.unwrapped)
+        current_stage = adaptive_params["stage"]
         
-        # 获取算法实际使用的参数
-        actual_lr = getattr(alg, 'learning_rate', ppo_params['learning_rate'])
-        actual_entropy = getattr(alg, 'entropy_coef', ppo_params['entropy_coef'])
-        actual_clip = getattr(alg, 'clip_param', ppo_params['clip_param'])
-        actual_kl = getattr(alg, 'desired_kl', ppo_params['desired_kl'])
+        # 打印当前 iteration 的自适应参数
+        log_str = format_adaptive_params_log(adaptive_params, iteration=it)
+        print(log_str)
         
-        # 每次迭代打印自适应参数状态
-        print(f"[Iter {it}] Stage {current_stage} ({get_stage_name(current_stage)}) | "
-              f"lr={actual_lr:.2e} entropy={actual_entropy:.4f} clip={actual_clip:.3f} kl={actual_kl:.4f}")
-        
-        # 检查阶段是否变化，更新 PPO 参数
+        # 检查阶段是否变化
         if current_stage != last_stage:
-            print(f"\n[Adaptive PPO] 检测到阶段变化: Stage {last_stage} -> Stage {current_stage}")
-            
-            # 更新 PPO 参数
-            ppo_updates = update_ppo_params(alg, current_stage)
-            
-            if ppo_updates:
-                print(f"[Adaptive PPO] PPO 参数已更新:")
-                for param_name, vals in ppo_updates.items():
-                    if param_name == "learning_rate":
-                        print(f"    - {param_name}: {vals['old']:.2e} -> {vals['new']:.2e}")
-                    else:
-                        print(f"    - {param_name}: {vals['old']:.4f} -> {vals['new']:.4f}")
-            
+            print(f"\n[Adaptive] 检测到阶段变化: Stage {last_stage} -> Stage {current_stage}")
             last_stage = current_stage
             print()
         

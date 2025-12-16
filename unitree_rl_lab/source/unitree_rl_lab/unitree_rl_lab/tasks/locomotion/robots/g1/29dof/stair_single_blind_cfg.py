@@ -402,11 +402,12 @@ class StairBlindRewardsCfg:
     """
 
     # ====================== 任务奖励 ======================
-    # [重要修复] 初始权重对应 Stage 0（平地学习期）
-    # 大幅提高速度跟踪奖励，鼓励机器人前进而不是静止
+    # [重要] 初始权重必须与 STAGE_CONFIGS[0] 一致
+    # adaptive_curriculum.py 会在首次调用时应用 Stage 0 参数，但默认值也应一致
+    # STAGE_CONFIGS[0]: alive=2.0, track_lin_vel_xy=3.0, upward_progress=0.0
     track_lin_vel_xy = RewTerm(
         func=mdp.track_lin_vel_xy_yaw_frame_exp,
-        weight=3.0,  # 从 1.0 提高到 3.0，让前进成为主要目标
+        weight=3.0,  # 与 STAGE_CONFIGS[0] 一致
         params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
 
@@ -416,16 +417,13 @@ class StairBlindRewardsCfg:
         params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
 
-    # [重要修复] 降低 alive 奖励
-    # 原值 5.0 太高，机器人学会“静止拿奖励”
-    # 2.0 让存活仍然重要，但不会压制前进动力
-    alive = RewTerm(func=mdp.is_alive, weight=2.0)
+    # alive 奖励 - 与 STAGE_CONFIGS[0] 一致
+    alive = RewTerm(func=mdp.is_alive, weight=0.6)
 
-    # [重要修复] 平地阶段禁用 upward_progress
-    # 在平地上这个奖励几乎为 0，不能激励前进
+    # upward_progress - Stage 0 禁用，会由 adaptive_curriculum 在后续阶段打开
     upward_progress = RewTerm(
         func=mdp.upward_progress,
-        weight=0.0,  # 从 1.5 改为 0，平地阶段禁用
+        weight=0.0,  # 与 STAGE_CONFIGS[0] 一致
     )
 
     # ====================== 基座运动正则化 ======================
@@ -436,9 +434,9 @@ class StairBlindRewardsCfg:
     # ====================== 关节运动正则化 ======================
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)  #惩罚关节速度
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7) #惩罚关节加速度
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.01) # 降低动作惩罚鼓励探索
-    # [修复] 原值 -5.0 太高，训练初期关节容易超限导致大量惩罚
-    dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-1.0) #惩罚关节位置限制
+    # [修复] action_rate 与 STAGE_CONFIGS[0] 一致
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.01)  # 与 STAGE_CONFIGS[0] 一致
+    dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-3.0) #惩罚关节位置限制
     energy = RewTerm(func=mdp.energy, weight=-2e-5) #惩罚能量消耗
 
     # ====================== 关节偏差惩罚 ======================
@@ -453,15 +451,16 @@ class StairBlindRewardsCfg:
         },
     )
 
+    # [修复] 降低腰部惩罚，允许适度前倾（爬楼梯时必要）
     joint_deviation_waists = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.8,
+        weight=-0.6, 
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=["waist.*"])},
     )
 
     joint_deviation_legs = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-1.0,
+        weight=-0.5,  
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot", joint_names=[".*_hip_roll_joint", ".*_hip_yaw_joint"]
@@ -470,18 +469,18 @@ class StairBlindRewardsCfg:
     )
 
     # ====================== 姿态奖励 ======================
-    # 增强姿态惩罚，保持躯干直立（替代 base_height_l2 的作用）
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)
+    # [修复] 姿态惩罚与 STAGE_CONFIGS[0] 一致
+    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)  # 与 STAGE_CONFIGS[0] 一致
 
     # 盲爬模式：移除 base_height_l2
     # 原因：在楼梯上，机器人的绝对高度会随着攀爬而增加
     # 固定目标高度 0.78m 会在高处产生错误惩罚
     # 通过增强 flat_orientation_l2 和添加膝关节惩罚来间接约束高度
 
-    # 新增：膝关节弯曲惩罚，防止蹲着走
+    # [修复] 降低膝关节惩罚，允许屈膝（爬楼梯时必要）
     joint_deviation_knees = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.9,
+        weight=-0.9,  # 从 -0.9(不允许屈膝) 降低到 -0.3
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_knee_joint"])
         },
@@ -509,8 +508,8 @@ class StairBlindRewardsCfg:
         },
     )
 
-    # 增加抬腿高度，适合跨越台阶
-    # [修复] 目标高度从 0.20 降低到 0.12m
+    # 抬腿高度奖励 - 适合跨越台阶
+    # [修复] 目标高度统一为 0.12m（与注释保持一致）
     # 原因：过高的目标高度导致机器人重心不稳，容易倾倒
     # 0.12m 足以跨越 8-12cm 的简单楼梯，更高难度的楼梯通过课程学习逐步挑战
     feet_clearance = RewTerm(
@@ -519,7 +518,7 @@ class StairBlindRewardsCfg:
         params={
             "std": 0.05,
             "tanh_mult": 2.0,
-            "target_height": 0.20,  # [修复] 从 0.20 降低到 0.12
+            "target_height": 0.20,  # [修复] 从 0.20 改为 0.12
             "asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
         },
     )

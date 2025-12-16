@@ -87,7 +87,9 @@ class AdaptiveState:
         # [问题2修复] 平滑过渡相关状态
         self.transition_progress = 1.0   # 过渡进度 [0, 1]，1.0 表示过渡完成
         self.transition_start_step = 0   # 过渡开始的 step
-        self.transition_duration = 50000 # 过渡持续 50000 步（约 50 iteration）
+        # [修复] transition_duration 改为动态计算，基于 num_steps_per_env
+        # 目标: 约 50 次迭代完成过渡 (50 * 32 = 1600 步)
+        self._transition_iterations = 50  # 过渡目标迭代数
         self.source_stage = 0            # 过渡起始阶段
         self.target_stage = 0            # 过渡目标阶段
         
@@ -95,6 +97,9 @@ class AdaptiveState:
         self.max_episode_length = 1000   # 默认值，会在运行时更新
         self.num_envs = 4096             # 默认值
         self.num_steps_per_env = 32      # 默认值
+        
+        # [新增] 首次调用标志，用于初始化奖励权重
+        self.first_call = True
 
 
 def _get_adaptive_state() -> AdaptiveState:
@@ -258,6 +263,15 @@ def _get_blended_weight(param_name: str, state: AdaptiveState) -> float:
     return source_val + smooth_t * (target_val - source_val)
 
 
+def _get_transition_duration(state: AdaptiveState) -> int:
+    """
+    动态计算过渡持续步数
+    
+    基于 num_steps_per_env 计算，目标是约 50 次迭代完成过渡
+    """
+    return state._transition_iterations * max(int(state.num_steps_per_env), 1)
+
+
 def _update_transition_progress(state: AdaptiveState, step_counter: int):
     """
     更新过渡进度
@@ -268,7 +282,8 @@ def _update_transition_progress(state: AdaptiveState, step_counter: int):
     """
     if state.transition_progress < 1.0:
         elapsed = step_counter - state.transition_start_step
-        state.transition_progress = min(1.0, elapsed / state.transition_duration)
+        transition_duration = _get_transition_duration(state)
+        state.transition_progress = min(1.0, elapsed / max(transition_duration, 1))
 
 
 def _update_reward_weights_smooth(env, state: AdaptiveState) -> dict:
@@ -504,6 +519,9 @@ def _check_and_update_stage(
             # 计算存活比例用于日志
             survival_ratio = avg_length / max(state.max_episode_length, 1)
             
+            # 动态计算过渡持续步数
+            transition_duration = _get_transition_duration(state)
+            
             # 打印日志
             sync_note = " [与terrain_level同步]" if force_check else ""
             print(f"\n{'=' * 70}")
@@ -517,7 +535,11 @@ def _check_and_update_stage(
             print(f"    - Mean Terrain Level:  {avg_terrain:.2f}")
             print(f"    - Current Iteration:   ~{state.estimated_iteration}")
             print("-" * 70)
-            print("  奖励权重: 平滑过渡中... (约 {:.0f} 步完成)".format(state.transition_duration))
+            print(f"  奖励权重过渡: 约 {transition_duration} 步 (~{state._transition_iterations} 次迭代)")
+            print(f"    - alive:             {STAGE_CONFIGS[old_stage].get('alive', 0):.2f} -> {STAGE_CONFIGS[new_stage].get('alive', 0):.2f}")
+            print(f"    - track_lin_vel_xy:  {STAGE_CONFIGS[old_stage].get('track_lin_vel_xy', 0):.2f} -> {STAGE_CONFIGS[new_stage].get('track_lin_vel_xy', 0):.2f}")
+            print(f"    - upward_progress:   {STAGE_CONFIGS[old_stage].get('upward_progress', 0):.2f} -> {STAGE_CONFIGS[new_stage].get('upward_progress', 0):.2f}")
+            print(f"    - flat_orientation:  {STAGE_CONFIGS[old_stage].get('flat_orientation_l2', 0):.2f} -> {STAGE_CONFIGS[new_stage].get('flat_orientation_l2', 0):.2f}")
             
             if termination_updates:
                 print("  终止条件变化:")
@@ -586,6 +608,30 @@ def adaptive_terrain_levels(
     # 缓存 num_envs 用于 iteration 估算
     state.num_envs = env.num_envs
     
+    # ==================== 0.5 首次调用初始化 ====================
+    # [新增] 确保训练启动时奖励权重与 Stage 0 配置一致
+    if state.first_call:
+        state.first_call = False
+        print(f"\n{'=' * 70}")
+        print("[Adaptive Training] 首次初始化 - 应用 Stage 0 参数")
+        print("-" * 70)
+        reward_updates = _update_reward_weights(env, 0)
+        termination_updates = _update_termination_params(env, 0)
+        
+        if reward_updates:
+            print("  奖励权重初始化:")
+            for name, vals in reward_updates.items():
+                print(f"    - {name}: {vals['old']:.2f} -> {vals['new']:.2f}")
+        
+        if termination_updates:
+            print("  终止条件初始化:")
+            for name, vals in termination_updates.items():
+                old_val = vals['old'] if vals['old'] is not None else 0.0
+                print(f"    - {name}: {old_val:.2f} -> {vals['new']:.2f}")
+        
+        print(f"  过渡持续: ~{_get_transition_duration(state)} 步 (~{state._transition_iterations} 次迭代)")
+        print("=" * 70 + "\n")
+    
     # ==================== 1. 收集指标 ====================
     # 获取当前 episode 长度（使用重置环境的长度，因为这些是刚结束的 episode）
     if len(env_ids) > 0:
@@ -652,6 +698,21 @@ def get_stage_name(stage: int = None) -> str:
 def reset_adaptive_state():
     """重置自适应状态（用于新训练开始时）"""
     _get_adaptive_state().reset()
+
+
+def set_num_steps_per_env(num_steps: int):
+    """
+    设置 num_steps_per_env（用于 iteration 估算）
+    
+    此函数应在训练开始时调用，因为 num_steps_per_env 是 runner 的属性，
+    无法从 env 中直接获取。
+    
+    Args:
+        num_steps: 每个环境每次迭代的步数
+    """
+    state = _get_adaptive_state()
+    state.num_steps_per_env = num_steps
+    print(f"[Adaptive] num_steps_per_env 设置为 {num_steps}")
 
 
 def get_adaptive_state_dict() -> dict:
@@ -889,3 +950,104 @@ def get_stage_info() -> dict:
         "max_episode_length": state.max_episode_length,
         "thresholds": STAGE_THRESHOLDS,
     }
+
+
+def get_current_params_for_logging(env) -> dict:
+    """
+    获取当前自适应参数的完整快照（用于每个 iteration 的日志打印）
+    
+    Args:
+        env: 环境实例（用于读取实际的奖励权重）
+    
+    Returns:
+        包含所有关键参数的字典:
+        - stage: 当前阶段
+        - transition_progress: 过渡进度 (0-1)
+        - reward_weights: 实际的奖励权重
+        - metrics: 训练指标 (survival_ratio, terrain_level)
+    """
+    state = _get_adaptive_state()
+    
+    # 计算训练指标
+    avg_length = sum(state.episode_lengths) / len(state.episode_lengths) if state.episode_lengths else 0
+    avg_terrain = sum(state.terrain_levels) / len(state.terrain_levels) if state.terrain_levels else 0
+    survival_ratio = avg_length / max(state.max_episode_length, 1)
+    
+    # 获取实际的奖励权重
+    reward_weights = {}
+    reward_names = ["alive", "track_lin_vel_xy", "upward_progress", "flat_orientation_l2", "action_rate"]
+    for name in reward_names:
+        try:
+            cfg = env.reward_manager.get_term_cfg(name)
+            reward_weights[name] = cfg.weight
+        except (ValueError, AttributeError):
+            reward_weights[name] = None
+    
+    # 获取终止条件参数
+    termination_params = {}
+    try:
+        cfg = env.termination_manager.get_term_cfg("bad_orientation")
+        termination_params["limit_angle"] = cfg.params.get("limit_angle", None)
+    except (ValueError, AttributeError):
+        termination_params["limit_angle"] = None
+    
+    return {
+        "stage": state.current_stage,
+        "stage_name": get_stage_name(state.current_stage),
+        "transition_progress": state.transition_progress,
+        "source_stage": state.source_stage,
+        "target_stage": state.target_stage,
+        "estimated_iteration": state.estimated_iteration,
+        "reward_weights": reward_weights,
+        "termination_params": termination_params,
+        "metrics": {
+            "survival_ratio": survival_ratio,
+            "mean_episode_length": avg_length,
+            "mean_terrain_level": avg_terrain,
+            "max_episode_length": state.max_episode_length,
+        },
+    }
+
+
+def format_adaptive_params_log(params: dict, iteration: int = None) -> str:
+    """
+    格式化自适应参数为日志字符串（单行或多行）
+    
+    Args:
+        params: get_current_params_for_logging() 的返回值
+        iteration: 当前迭代数（可选）
+    
+    Returns:
+        格式化的日志字符串
+    """
+    stage = params["stage"]
+    stage_name = params["stage_name"]
+    trans_prog = params["transition_progress"]
+    rw = params["reward_weights"]
+    metrics = params["metrics"]
+    
+    # 过渡状态指示
+    if trans_prog < 1.0:
+        trans_str = f" [过渡中 {trans_prog*100:.0f}%: S{params['source_stage']}->S{params['target_stage']}]"
+    else:
+        trans_str = ""
+    
+    # 核心奖励权重
+    alive = rw.get("alive", 0) or 0
+    track = rw.get("track_lin_vel_xy", 0) or 0
+    upward = rw.get("upward_progress", 0) or 0
+    orient = rw.get("flat_orientation_l2", 0) or 0
+    
+    # 训练指标
+    surv = metrics["survival_ratio"] * 100
+    terrain = metrics["mean_terrain_level"]
+    
+    # 格式化输出
+    iter_str = f"[Iter {iteration}] " if iteration is not None else ""
+    log_str = (
+        f"{iter_str}Stage {stage} ({stage_name}){trans_str} | "
+        f"surv={surv:.1f}% terrain={terrain:.2f} | "
+        f"alive={alive:.2f} track={track:.2f} upward={upward:.2f} orient={orient:.2f}"
+    )
+    
+    return log_str

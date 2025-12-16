@@ -37,6 +37,7 @@ from .adaptive_curriculum import (  # noqa: F401
     get_current_stage,
     get_stage_name,
     reset_adaptive_state,
+    set_num_steps_per_env,
     init_adaptive_state_from_metrics,
     get_adaptive_state_dict,
     load_adaptive_state_dict,
@@ -44,4 +45,7 @@ from .adaptive_curriculum import (  # noqa: F401
     update_ppo_params,
     apply_stage_params,
     STAGE_CONFIGS,
+    # 新增的日志函数
+    get_current_params_for_logging,
+    format_adaptive_params_log,
 )
