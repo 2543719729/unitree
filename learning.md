@@ -16,3 +16,18 @@ GAE lambda: 0.95
 
 
  Total Loss = Policy Loss - entropy_coef × Entropy + value_loss_coef × Value Loss
+
+ tensorboard --logdir=logs/rsl_rl
+ 
+
+
+ Unitree-G1-29dof-Velocity
+  Unitree-G1-29dof-Velocity-HeightScan
+  Unitree-G1-29dof-Stair-Blind
+  Unitree-G1-29dof-Stair
+  Unitree-G1-29dof-Unified
+  Unitree-G1-29dof-Marching
+  Unitree-Go2-Velocity
+  Unitree-H1-Velocity
+  Unitree-G1-29dof-Mimic-Dance-102
+  Unitree-G1-29dof-Mimic-Gangnanm-Style

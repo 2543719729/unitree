@@ -48,51 +48,53 @@ from unitree_rl_lab.tasks.locomotion import mdp
 # ============================================================================
 #                           楼梯地形生成器配置
 # ============================================================================
-# 使用 MeshInvertedPyramidStairsTerrainCfg（倒金字塔）
-# 机器人从边缘（底部）出生，向中心（顶部）攀爬
-# 这样符合"上楼梯"的逻辑：从低处向高处爬
+# 地形配置 - 按难度行分配
+# [重要修复] 使用 difficulty_range 确保：
+#   - Level 0-2 (难度 0.0-0.3): 100% 平地，让机器人先学会站立和行走
+#   - Level 3-5 (难度 0.3-0.6): 简单楼梯
+#   - Level 6-7 (难度 0.6-0.8): 中等楼梯
+#   - Level 8-9 (难度 0.8-1.0): 困难楼梯
 STAIR_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
     size=(8.0, 8.0),              # 每个地形块尺寸
     border_width=20.0,            # 边界宽度
-    num_rows=10,                  # 行数（难度等级）
+    num_rows=10,                  # 行数（难度等级 0-9）
     num_cols=20,                  # 列数（每个难度的变体）
     horizontal_scale=0.1,         # 水平分辨率
     vertical_scale=0.005,         # 垂直分辨率
     slope_threshold=0.75,         # 斜坡阈值
     difficulty_range=(0.0, 1.0),  # 难度范围
     use_cache=False,              # 不使用缓存
+    curriculum=True,              # 启用课程学习模式
     sub_terrains={
-        # 基础平地（50%）- 大幅增加！先学会站立和行走
-        # [修复] 原值 15% 太少，机器人还没学会站立就要学爬楼梯
-        "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.50),
+        # ========== 平地 (Level 0-2, 难度 0.0-0.3) ==========
+        # 机器人必须先在平地上学会站立和行走
+        "flat": terrain_gen.MeshPlaneTerrainCfg(
+            proportion=0.3,  # 对应 Level 0-2
+        ),
 
-        # ========== 上楼梯（使用 InvertedPyramid，从边缘向中心爬升）==========
-        # 简单上楼梯（25%）- 低阶高，宽踏面
-        # [修复] 原值 35%，减少到 25%
+        # ========== 简单楼梯 (Level 3-5, 难度 0.3-0.6) ==========
         "stairs_up_easy": terrain_gen.MeshInvertedPyramidStairsTerrainCfg(
-            proportion=0.25,
-            step_height_range=(0.08, 0.12),  # 8-12cm 阶高
-            step_width=0.35,                  # 35cm 踏面宽度
-            platform_width=2.0,               # 2m 顶部平台
-            border_width=1.0,                 # 1m 边界
+            proportion=0.3,  # 对应 Level 3-5
+            step_height_range=(0.06, 0.10),  # 6-10cm 阶高（更低）
+            step_width=0.38,                  # 38cm 踏面宽度（更宽）
+            platform_width=2.5,               # 2.5m 顶部平台
+            border_width=1.0,
             holes=False,
         ),
 
-        # 中等上楼梯（15%）- 标准室内楼梯
-        # [修复] 原值 30%，减少到 15%
+        # ========== 中等楼梯 (Level 6-7, 难度 0.6-0.8) ==========
         "stairs_up_medium": terrain_gen.MeshInvertedPyramidStairsTerrainCfg(
-            proportion=0.15,
-            step_height_range=(0.10, 0.16),  # 10-16cm 阶高
-            step_width=0.32,                  # 32cm 踏面宽度
+            proportion=0.2,  # 对应 Level 6-7
+            step_height_range=(0.10, 0.14),  # 10-14cm 阶高
+            step_width=0.34,                  # 34cm 踏面宽度
             platform_width=2.0,
             border_width=1.0,
             holes=False,
         ),
 
-        # 困难上楼梯（10%）- 较高阶梯
-        # [修复] 原值 20%，减少到 10%
+        # ========== 困难楼梯 (Level 8-9, 难度 0.8-1.0) ==========
         "stairs_up_hard": terrain_gen.MeshInvertedPyramidStairsTerrainCfg(
-            proportion=0.10,
+            proportion=0.2,  # 对应 Level 8-9
             step_height_range=(0.14, 0.18),  # 14-18cm 阶高
             step_width=0.30,                  # 30cm 踏面宽度
             platform_width=1.5,
@@ -401,9 +403,11 @@ class StairBlindRewardsCfg:
     """
 
     # ====================== 任务奖励 ======================
+    # [重要修复] 初始权重对应 Stage 0（平地学习期）
+    # 大幅提高速度跟踪奖励，鼓励机器人前进而不是静止
     track_lin_vel_xy = RewTerm(
         func=mdp.track_lin_vel_xy_yaw_frame_exp,
-        weight=1.0,
+        weight=3.0,  # 从 1.0 提高到 3.0，让前进成为主要目标
         params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
 
@@ -413,15 +417,16 @@ class StairBlindRewardsCfg:
         params={"command_name": "base_velocity", "std": math.sqrt(0.25)},
     )
 
-    # [修复] 大幅增加 alive 奖励权重
-    # 原值 2.0 不足以激励存活，机器人没有动力保持平衡
-    # 5.0 让存活成为最重要的目标，优先学会站立
-    alive = RewTerm(func=mdp.is_alive, weight=5.0)
+    # [重要修复] 降低 alive 奖励
+    # 原值 5.0 太高，机器人学会“静止拿奖励”
+    # 2.0 让存活仍然重要，但不会压制前进动力
+    alive = RewTerm(func=mdp.is_alive, weight=2.0)
 
-    # 向上进展奖励 - 楼梯任务核心奖励
+    # [重要修复] 平地阶段禁用 upward_progress
+    # 在平地上这个奖励几乎为 0，不能激励前进
     upward_progress = RewTerm(
         func=mdp.upward_progress,
-        weight=1.5,
+        weight=0.0,  # 从 1.5 改为 0，平地阶段禁用
     )
 
     # ====================== 基座运动正则化 ======================
@@ -432,7 +437,7 @@ class StairBlindRewardsCfg:
     # ====================== 关节运动正则化 ======================
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)  #惩罚关节速度
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7) #惩罚关节加速度
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05) #惩罚动作率
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.01) # 降低动作惩罚鼓励探索
     # [修复] 原值 -5.0 太高，训练初期关节容易超限导致大量惩罚
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-1.0) #惩罚关节位置限制
     energy = RewTerm(func=mdp.energy, weight=-2e-5) #惩罚能量消耗

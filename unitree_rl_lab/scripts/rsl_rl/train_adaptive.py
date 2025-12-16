@@ -107,8 +107,10 @@ import gymnasium as gym
 import inspect
 import os
 import shutil
+import statistics
 import time
 import torch
+from collections import deque
 from datetime import datetime
 
 from rsl_rl.runners import OnPolicyRunner
@@ -161,10 +163,11 @@ def adaptive_learn(
         init_at_random_ep_len: 是否随机初始化 episode 长度
         ppo_update_interval: PPO 参数更新检查间隔
     """
+    # Initialize writer (same as runner.learn())
+    runner._prepare_logging_writer()
+    
     env = runner.env
     alg = runner.alg
-    cfg = runner.cfg
-    logger = runner.logger
     
     # Randomize initial episode lengths (for exploration)
     if init_at_random_ep_len:
@@ -175,6 +178,13 @@ def adaptive_learn(
     # Start learning
     obs = env.get_observations().to(runner.device)
     runner.train_mode()  # switch to train mode
+    
+    # Book keeping (same as runner.learn())
+    ep_infos = []
+    rewbuffer = deque(maxlen=100)
+    lenbuffer = deque(maxlen=100)
+    cur_reward_sum = torch.zeros(env.num_envs, dtype=torch.float, device=runner.device)
+    cur_episode_length = torch.zeros(env.num_envs, dtype=torch.float, device=runner.device)
     
     # Ensure all parameters are in-synced
     if runner.is_distributed:
@@ -187,15 +197,15 @@ def adaptive_learn(
     print(f"[Adaptive Training] PPO 参数更新间隔: {ppo_update_interval} 迭代\n")
     
     # Start training
-    start_it = runner.current_learning_iteration
-    total_it = start_it + num_learning_iterations
+    start_iter = runner.current_learning_iteration
+    tot_iter = start_iter + num_learning_iterations
     
-    for it in range(start_it, total_it):
+    for it in range(start_iter, tot_iter):
         start = time.time()
         
         # Rollout
         with torch.inference_mode():
-            for _ in range(cfg["num_steps_per_env"]):
+            for _ in range(runner.num_steps_per_env):
                 # Sample actions
                 actions = alg.act(obs)
                 # Step the environment
@@ -204,13 +214,23 @@ def adaptive_learn(
                 obs, rewards, dones = (obs.to(runner.device), rewards.to(runner.device), dones.to(runner.device))
                 # Process the step
                 alg.process_env_step(obs, rewards, dones, extras)
-                # Extract intrinsic rewards (only for logging)
-                intrinsic_rewards = alg.intrinsic_rewards if runner.alg_cfg["rnd_cfg"] else None
-                # Book keeping
-                logger.process_env_step(rewards, dones, extras, intrinsic_rewards)
+                
+                # Book keeping (same as runner.learn())
+                if runner.log_dir is not None:
+                    if "episode" in extras:
+                        ep_infos.append(extras["episode"])
+                    elif "log" in extras:
+                        ep_infos.append(extras["log"])
+                    cur_reward_sum += rewards
+                    cur_episode_length += 1
+                    new_ids = (dones > 0).nonzero(as_tuple=False)
+                    rewbuffer.extend(cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist())
+                    lenbuffer.extend(cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())
+                    cur_reward_sum[new_ids] = 0
+                    cur_episode_length[new_ids] = 0
             
             stop = time.time()
-            collect_time = stop - start
+            collection_time = stop - start
             start = stop
             
             # Compute returns
@@ -245,25 +265,19 @@ def adaptive_learn(
                 last_stage = current_stage
                 print()
         
-        # Log information
-        logger.log(
-            it=it,
-            start_it=start_it,
-            total_it=total_it,
-            collect_time=collect_time,
-            learn_time=learn_time,
-            loss_dict=loss_dict,
-            learning_rate=alg.learning_rate,
-            action_std=alg.policy.action_std,
-            rnd_weight=alg.rnd.weight if runner.alg_cfg["rnd_cfg"] else None,
-        )
+        # Log information (using runner.log() method)
+        if runner.log_dir is not None and not runner.disable_logs:
+            runner.log(locals())
+            # Save model
+            if it % runner.save_interval == 0:
+                runner.save(os.path.join(runner.log_dir, f"model_{it}.pt"))
         
-        # Save model
-        if it % cfg["save_interval"] == 0:
-            runner.save(os.path.join(runner.logger.log_dir, f"model_{it}.pt"))
+        # Clear episode infos
+        ep_infos.clear()
     
     # Save final model
-    runner.save(os.path.join(runner.logger.log_dir, f"model_{runner.current_learning_iteration}.pt"))
+    if runner.log_dir is not None and not runner.disable_logs:
+        runner.save(os.path.join(runner.log_dir, f"model_{runner.current_learning_iteration}.pt"))
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")

@@ -70,7 +70,7 @@ class AdaptiveState:
         self.stage_stable_count = 0
         self.last_update_step = 0
         self.stage_enter_step = 0  # 进入当前阶段的步数
-        self.min_stage_duration = 5000  # 每个阶段最少停留步数
+        self.min_stage_duration = 2000  # 每个阶段最少停留步数（从5000降低）
 
 
 def _get_adaptive_state() -> AdaptiveState:
@@ -83,13 +83,14 @@ def _get_adaptive_state() -> AdaptiveState:
 # ============================================================================
 
 STAGE_CONFIGS = {
-    0: {  # 初始探索期
+    0: {  # 初始探索期（平地学习）
         "name": "初始探索期",
-        # 奖励权重
-        "alive": 6.0,
-        "upward_progress": 0.5,
+        # 奖励权重 - 降低 alive 避免静止拿奖励，提高速度跟踪
+        "alive": 2.0,
+        "track_lin_vel_xy": 3.0,  # 大幅提高速度跟踪
+        "upward_progress": 0.0,   # 平地禁用
         "flat_orientation_l2": -1.0,
-        "action_rate": -0.02,
+        "action_rate": -0.01,     # 降低动作惩罚鼓励探索
         # 终止条件
         "limit_angle": 1.4,  # 80°
         # 课程学习参数
@@ -102,13 +103,14 @@ STAGE_CONFIGS = {
         "clip_param": 0.2,
         "desired_kl": 0.015,
     },
-    1: {  # 站立稳定期
+    1: {  # 站立稳定期（平地行走）
         "name": "站立稳定期",
         # 奖励权重
-        "alive": 5.0,
-        "upward_progress": 1.0,
+        "alive": 2.5,
+        "track_lin_vel_xy": 2.5,
+        "upward_progress": 0.5,   # 开始引入少量上升奖励
         "flat_orientation_l2": -1.5,
-        "action_rate": -0.03,
+        "action_rate": -0.02,
         # 终止条件
         "limit_angle": 1.3,  # 74°
         # 课程学习参数
@@ -121,13 +123,14 @@ STAGE_CONFIGS = {
         "clip_param": 0.2,
         "desired_kl": 0.012,
     },
-    2: {  # 行走学习期
+    2: {  # 行走学习期（过渡到楼梯）
         "name": "行走学习期",
         # 奖励权重
-        "alive": 4.0,
-        "upward_progress": 2.0,
+        "alive": 3.0,
+        "track_lin_vel_xy": 2.0,
+        "upward_progress": 1.5,
         "flat_orientation_l2": -2.0,
-        "action_rate": -0.04,
+        "action_rate": -0.03,
         # 终止条件
         "limit_angle": 1.2,  # 69°
         # 课程学习参数
@@ -143,8 +146,9 @@ STAGE_CONFIGS = {
     3: {  # 楼梯适应期
         "name": "楼梯适应期",
         # 奖励权重
-        "alive": 3.0,
-        "upward_progress": 3.5,
+        "alive": 2.5,
+        "track_lin_vel_xy": 1.5,
+        "upward_progress": 3.0,
         "flat_orientation_l2": -1.5,
         "action_rate": -0.04,
         # 终止条件
@@ -163,7 +167,8 @@ STAGE_CONFIGS = {
         "name": "楼梯精通期",
         # 奖励权重
         "alive": 2.0,
-        "upward_progress": 5.0,
+        "track_lin_vel_xy": 1.0,
+        "upward_progress": 4.0,
         "flat_orientation_l2": -1.5,
         "action_rate": -0.04,
         # 终止条件
@@ -227,7 +232,7 @@ def _update_reward_weights(env: ManagerBasedRLEnv, stage: int) -> dict:
     updated = {}
     
     # 需要更新的奖励项
-    reward_names = ["alive", "upward_progress", "flat_orientation_l2", "action_rate"]
+    reward_names = ["alive", "track_lin_vel_xy", "upward_progress", "flat_orientation_l2", "action_rate"]
     
     for name in reward_names:
         if name in params:
@@ -414,9 +419,9 @@ def adaptive_terrain_levels(
     current_terrain_level = terrain.terrain_levels.float().mean().item()
     state.terrain_levels.append(current_terrain_level)
     
-    # ==================== 2. 阶段检测（每 1000 步检查一次）====================
+    # ==================== 2. 阶段检测（每 500 步检查一次）====================
     step_counter = env.common_step_counter
-    check_interval = 1000
+    check_interval = 500  # 从 1000 降低到 500，加快响应
     
     if step_counter - state.last_update_step >= check_interval:
         state.last_update_step = step_counter
@@ -441,8 +446,8 @@ def adaptive_terrain_levels(
         if new_stage != state.current_stage and min_duration_met:
             state.stage_stable_count += 1
             
-            # 连续 5 次检测到相同的新阶段才切换
-            if state.stage_stable_count >= 5:
+            # 连续 3 次检测到相同的新阶段才切换（从 5 降低到 3）
+            if state.stage_stable_count >= 3:
                 old_stage = state.current_stage
                 
                 # 执行参数更新
