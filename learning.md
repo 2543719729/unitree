@@ -13,7 +13,8 @@ entropy_coef: 0.01
 GAE lambda: 0.95
 
  python .\scripts\rsl_rl\train.py --task Unitree-G1-29dof-Stair-Blind
-
+python scripts/rsl_rl/train_adaptive.py --task=Unitree-G1-29dof-Stair-Blind --num_envs=4096 --headless
+python scripts/rsl_rl/train_adaptive.py --task=Unitree-G1-29dof-Stair-Blind --num_envs=4096 --headless --resume --load_run=2025-12-16_10-26-09 --checkpoint=model_400.pt
 
  Total Loss = Policy Loss - entropy_coef × Entropy + value_loss_coef × Value Loss
 
@@ -31,3 +32,5 @@ GAE lambda: 0.95
   Unitree-H1-Velocity
   Unitree-G1-29dof-Mimic-Dance-102
   Unitree-G1-29dof-Mimic-Gangnanm-Style
+
+  ssh -R 7897:127.0.0.1:7897 -p 31024 root@connect.bjb1.seetacloud.com

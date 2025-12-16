@@ -520,7 +520,7 @@ class StairBlindRewardsCfg:
         params={
             "std": 0.05,
             "tanh_mult": 2.0,
-            "target_height": 0.20,  # [修复] 从 0.20 降低到 0.12
+            "target_height": 0.12,  # 降低目标高度，避免重心不稳
             "asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
         },
     )
