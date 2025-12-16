@@ -77,7 +77,7 @@ STAIR_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
             proportion=0.3,  # 对应 Level 3-5
             step_height_range=(0.06, 0.10),  # 6-10cm 阶高（更低）
             step_width=0.38,                  # 38cm 踏面宽度（更宽）
-            platform_width=2.5,               # 2.5m 顶部平台
+            platform_width=0.8,               # 减小平台，让机器人更快接触楼梯
             border_width=1.0,
             holes=False,
         ),
@@ -87,7 +87,7 @@ STAIR_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
             proportion=0.2,  # 对应 Level 6-7
             step_height_range=(0.10, 0.14),  # 10-14cm 阶高
             step_width=0.34,                  # 34cm 踏面宽度
-            platform_width=2.0,
+            platform_width=0.6,               # 减小平台
             border_width=1.0,
             holes=False,
         ),
@@ -97,7 +97,7 @@ STAIR_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
             proportion=0.2,  # 对应 Level 8-9
             step_height_range=(0.14, 0.18),  # 14-18cm 阶高
             step_width=0.30,                  # 30cm 踏面宽度
-            platform_width=1.5,
+            platform_width=0.5,               # 减小平台
             border_width=1.0,
             holes=False,
         ),

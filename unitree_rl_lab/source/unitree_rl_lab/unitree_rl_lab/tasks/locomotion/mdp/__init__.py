@@ -37,7 +37,11 @@ from .adaptive_curriculum import (  # noqa: F401
     get_current_stage,
     get_stage_name,
     reset_adaptive_state,
+    init_adaptive_state_from_metrics,
+    get_adaptive_state_dict,
+    load_adaptive_state_dict,
     get_ppo_params,
     update_ppo_params,
+    apply_stage_params,
     STAGE_CONFIGS,
 )

@@ -23,6 +23,8 @@
 
 """Launch Isaac Sim Simulator first."""
 
+import isaacsim  # noqa: F401 - must be imported first for pip-installed Isaac Sim
+
 import gymnasium as gym
 import pathlib
 import sys
@@ -60,6 +62,14 @@ parser.add_argument(
 )
 parser.add_argument(
     "--ppo_update_interval", type=int, default=100, help="Interval (iterations) to check and update PPO params."
+)
+parser.add_argument(
+    "--resume_episode_length", type=float, default=1000.0, 
+    help="Estimated episode length for resume training to initialize adaptive stage."
+)
+parser.add_argument(
+    "--resume_terrain_level", type=float, default=1.0,
+    help="Estimated terrain level for resume training to initialize adaptive stage."
 )
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -136,8 +146,13 @@ from unitree_rl_lab.utils.export_deploy_cfg import export_deploy_cfg
 from unitree_rl_lab.tasks.locomotion.mdp import (
     get_current_stage,
     get_stage_name,
+    get_ppo_params,
     update_ppo_params,
     reset_adaptive_state,
+    init_adaptive_state_from_metrics,
+    get_adaptive_state_dict,
+    load_adaptive_state_dict,
+    apply_stage_params,
 )
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -196,6 +211,9 @@ def adaptive_learn(
     print(f"\n[Adaptive Training] 初始阶段: Stage {last_stage} ({get_stage_name(last_stage)})")
     print(f"[Adaptive Training] PPO 参数更新间隔: {ppo_update_interval} 迭代\n")
     
+    # 在训练开始时应用当前阶段的所有参数（奖励权重、终止条件、PPO 参数）
+    apply_stage_params(env.unwrapped, alg, last_stage)
+    
     # Start training
     start_iter = runner.current_learning_iteration
     tot_iter = start_iter + num_learning_iterations
@@ -243,41 +261,58 @@ def adaptive_learn(
         learn_time = stop - start
         runner.current_learning_iteration = it
         
-        # ==================== 自适应 PPO 参数更新 ====================
-        if it % ppo_update_interval == 0:
-            current_stage = get_current_stage()
+        # ==================== 自适应 PPO 参数状态打印 ====================
+        current_stage = get_current_stage()
+        ppo_params = get_ppo_params(current_stage)
+        
+        # 获取算法实际使用的参数
+        actual_lr = getattr(alg, 'learning_rate', ppo_params['learning_rate'])
+        actual_entropy = getattr(alg, 'entropy_coef', ppo_params['entropy_coef'])
+        actual_clip = getattr(alg, 'clip_param', ppo_params['clip_param'])
+        actual_kl = getattr(alg, 'desired_kl', ppo_params['desired_kl'])
+        
+        # 每次迭代打印自适应参数状态
+        print(f"[Iter {it}] Stage {current_stage} ({get_stage_name(current_stage)}) | "
+              f"lr={actual_lr:.2e} entropy={actual_entropy:.4f} clip={actual_clip:.3f} kl={actual_kl:.4f}")
+        
+        # 检查阶段是否变化，更新 PPO 参数
+        if current_stage != last_stage:
+            print(f"\n[Adaptive PPO] 检测到阶段变化: Stage {last_stage} -> Stage {current_stage}")
             
-            # 检查阶段是否变化
-            if current_stage != last_stage:
-                print(f"\n[Adaptive PPO] 检测到阶段变化: Stage {last_stage} -> Stage {current_stage}")
-                
-                # 更新 PPO 参数
-                ppo_updates = update_ppo_params(alg, current_stage)
-                
-                if ppo_updates:
-                    print(f"[Adaptive PPO] PPO 参数已更新:")
-                    for param_name, vals in ppo_updates.items():
-                        if param_name == "learning_rate":
-                            print(f"    - {param_name}: {vals['old']:.2e} -> {vals['new']:.2e}")
-                        else:
-                            print(f"    - {param_name}: {vals['old']:.4f} -> {vals['new']:.4f}")
-                
-                last_stage = current_stage
-                print()
+            # 更新 PPO 参数
+            ppo_updates = update_ppo_params(alg, current_stage)
+            
+            if ppo_updates:
+                print(f"[Adaptive PPO] PPO 参数已更新:")
+                for param_name, vals in ppo_updates.items():
+                    if param_name == "learning_rate":
+                        print(f"    - {param_name}: {vals['old']:.2e} -> {vals['new']:.2e}")
+                    else:
+                        print(f"    - {param_name}: {vals['old']:.4f} -> {vals['new']:.4f}")
+            
+            last_stage = current_stage
+            print()
         
         # Log information (using runner.log() method)
         if runner.log_dir is not None and not runner.disable_logs:
             runner.log(locals())
-            # Save model
+            # Save model and adaptive state
             if it % runner.save_interval == 0:
-                runner.save(os.path.join(runner.log_dir, f"model_{it}.pt"))
+                model_path = os.path.join(runner.log_dir, f"model_{it}.pt")
+                runner.save(model_path)
+                # 保存自适应状态到同一目录
+                adaptive_state_path = os.path.join(runner.log_dir, f"adaptive_state_{it}.pt")
+                torch.save(get_adaptive_state_dict(), adaptive_state_path)
         
         # Clear episode infos
         ep_infos.clear()
     
-    # Save final model
+    # Save final model and adaptive state
     if runner.log_dir is not None and not runner.disable_logs:
-        runner.save(os.path.join(runner.log_dir, f"model_{runner.current_learning_iteration}.pt"))
+        final_iter = runner.current_learning_iteration
+        runner.save(os.path.join(runner.log_dir, f"model_{final_iter}.pt"))
+        # 保存最终自适应状态
+        torch.save(get_adaptive_state_dict(), os.path.join(runner.log_dir, f"adaptive_state_{final_iter}.pt"))
 
 
 @hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
@@ -339,12 +374,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
-    # 重置自适应状态（新训练开始）
-    reset_adaptive_state()
-    print("\n" + "=" * 70)
-    print("[Adaptive Training] 自适应训练模式已启用")
-    print("=" * 70 + "\n")
-
     # create runner from rsl-rl
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     # write git state to logs
@@ -353,6 +382,31 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         runner.load(resume_path)
+        
+        # 尝试自动加载自适应状态
+        # 从 model_XXX.pt 推断 adaptive_state_XXX.pt 的路径
+        resume_dir = os.path.dirname(resume_path)
+        checkpoint_name = os.path.basename(resume_path)  # e.g., model_400.pt
+        iter_num = checkpoint_name.replace("model_", "").replace(".pt", "")  # e.g., 400
+        adaptive_state_path = os.path.join(resume_dir, f"adaptive_state_{iter_num}.pt")
+        
+        if os.path.exists(adaptive_state_path):
+            # 自动加载保存的自适应状态
+            print(f"[INFO]: Loading adaptive state from: {adaptive_state_path}")
+            adaptive_state_dict = torch.load(adaptive_state_path)
+            load_adaptive_state_dict(adaptive_state_dict)
+        else:
+            # 没有找到保存的状态，使用命令行参数或默认值推断
+            print(f"[INFO]: No adaptive state found at {adaptive_state_path}")
+            print(f"[INFO]: Initializing adaptive state from metrics...")
+            init_adaptive_state_from_metrics(args_cli.resume_episode_length, args_cli.resume_terrain_level)
+    else:
+        # 新训练，重置自适应状态
+        reset_adaptive_state()
+    
+    print("\n" + "=" * 70)
+    print("[Adaptive Training] 自适应训练模式已启用")
+    print("=" * 70 + "\n")
 
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)

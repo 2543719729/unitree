@@ -153,10 +153,10 @@ STAGE_CONFIGS = {
         "action_rate": -0.04,
         # 终止条件
         "limit_angle": 1.1,  # 63°
-        # 课程学习参数
-        "curriculum_type": "climb",
-        "height_weight": 2.0,
-        "forward_weight": 1.0,
+        # 课程学习参数 - 使用 survival 以便在平地上也能升级到楼梯
+        "curriculum_type": "survival",
+        "survival_ratio_upgrade": 0.7,    # 存活 70% 时间升级
+        "survival_ratio_downgrade": 0.2,  # 存活不足 20% 时间降级
         # PPO 参数
         "learning_rate": 3e-4,
         "entropy_coef": 0.008,
@@ -166,11 +166,11 @@ STAGE_CONFIGS = {
     4: {  # 楼梯精通期
         "name": "楼梯精通期",
         # 奖励权重
-        "alive": 2.0,
-        "track_lin_vel_xy": 1.0,
+        "alive": 1.0,
+        "track_lin_vel_xy": 2.5,
         "upward_progress": 4.0,
         "flat_orientation_l2": -1.5,
-        "action_rate": -0.04,
+        "action_rate": -0.02,
         # 终止条件
         "limit_angle": 1.0,  # 57°
         # 课程学习参数
@@ -178,8 +178,8 @@ STAGE_CONFIGS = {
         "height_weight": 2.5,
         "forward_weight": 0.5,
         # PPO 参数
-        "learning_rate": 1e-4,
-        "entropy_coef": 0.005,     # 低探索，精细调整
+        "learning_rate": 2e-4,
+        "entropy_coef": 0.008,     # 保持一定探索，避免策略塌缩到站立不动
         "clip_param": 0.12,
         "desired_kl": 0.005,
     },
@@ -274,45 +274,6 @@ def _update_termination_params(env: ManagerBasedRLEnv, stage: int) -> dict:
     return updated
 
 
-def _log_stage_transition(
-    old_stage: int,
-    new_stage: int,
-    mean_length: float,
-    mean_terrain: float,
-    reward_updates: dict,
-    termination_updates: dict,
-):
-    """打印阶段切换日志"""
-    old_name = STAGE_CONFIGS[old_stage]["name"]
-    new_name = STAGE_CONFIGS[new_stage]["name"]
-    
-    print("\n" + "=" * 70)
-    print("[Adaptive Training] 阶段切换!")
-    print("-" * 70)
-    print(f"  上一阶段: Stage {old_stage} ({old_name})")
-    print(f"  新 阶 段: Stage {new_stage} ({new_name})")
-    print("-" * 70)
-    print("  触发指标:")
-    print(f"    - Mean Episode Length: {mean_length:.1f} steps")
-    print(f"    - Mean Terrain Level:  {mean_terrain:.2f}")
-    print("-" * 70)
-    
-    if reward_updates:
-        print("  奖励权重变化:")
-        for name, vals in reward_updates.items():
-            print(f"    - {name}: {vals['old']:.2f} -> {vals['new']:.2f}")
-    
-    if termination_updates:
-        print("  终止条件变化:")
-        for name, vals in termination_updates.items():
-            old_val = vals['old'] if vals['old'] is not None else 0.0
-            old_deg = old_val * 57.3
-            new_deg = vals['new'] * 57.3
-            print(f"    - {name}: {old_val:.2f} rad ({old_deg:.0f}°) -> {vals['new']:.2f} rad ({new_deg:.0f}°)")
-    
-    print("=" * 70 + "\n")
-
-
 # ============================================================================
 #                         底层课程学习函数调用
 # ============================================================================
@@ -376,6 +337,110 @@ def _call_climb_curriculum(
 
 
 # ============================================================================
+#                         阶段检测与参数同步更新
+# ============================================================================
+
+def _check_and_update_stage(
+    env: ManagerBasedRLEnv,
+    state: AdaptiveState,
+    force_check: bool = False,
+) -> bool:
+    """
+    检查是否需要切换阶段，并同步更新自适应参数
+    
+    [重要修复] 此函数确保自适应参数与 terrain_levels 同步：
+        - 定期检查（每 500 步）
+        - terrain_levels 更新后强制检查
+    
+    Args:
+        env: 环境实例
+        state: 自适应状态
+        force_check: 是否强制检查（terrain_levels 更新后调用时设为 True）
+    
+    Returns:
+        是否发生了阶段切换
+    """
+    step_counter = env.common_step_counter
+    check_interval = 500
+    
+    # 非强制检查时，遵守检查间隔
+    if not force_check and (step_counter - state.last_update_step < check_interval):
+        return False
+    
+    if not force_check:
+        state.last_update_step = step_counter
+    
+    # 计算滑动平均
+    if len(state.episode_lengths) > 0:
+        avg_length = sum(state.episode_lengths) / len(state.episode_lengths)
+    else:
+        avg_length = 0.0
+    
+    if len(state.terrain_levels) > 0:
+        avg_terrain = sum(state.terrain_levels) / len(state.terrain_levels)
+    else:
+        avg_terrain = 0.0
+    
+    # 检测新阶段
+    new_stage = _detect_stage(avg_length, avg_terrain)
+    
+    # 检查是否满足阶段切换条件
+    min_duration_met = (step_counter - state.stage_enter_step) >= state.min_stage_duration
+    
+    if new_stage != state.current_stage and min_duration_met:
+        state.stage_stable_count += 1
+        
+        # 连续 3 次检测到相同的新阶段才切换
+        # 强制检查时（terrain_level 刚更新），只需 1 次确认即可立即切换
+        required_stable_count = 1 if force_check else 3
+        
+        if state.stage_stable_count >= required_stable_count:
+            old_stage = state.current_stage
+            
+            # 执行参数更新
+            reward_updates = _update_reward_weights(env, new_stage)
+            termination_updates = _update_termination_params(env, new_stage)
+            
+            # 打印日志
+            sync_note = " [与terrain_level同步]" if force_check else ""
+            print(f"\n{'=' * 70}")
+            print(f"[Adaptive Training] 阶段切换!{sync_note}")
+            print("-" * 70)
+            print(f"  上一阶段: Stage {old_stage} ({STAGE_CONFIGS[old_stage]['name']})")
+            print(f"  新 阶 段: Stage {new_stage} ({STAGE_CONFIGS[new_stage]['name']})")
+            print("-" * 70)
+            print("  触发指标:")
+            print(f"    - Mean Episode Length: {avg_length:.1f} steps")
+            print(f"    - Mean Terrain Level:  {avg_terrain:.2f}")
+            print("-" * 70)
+            
+            if reward_updates:
+                print("  奖励权重变化:")
+                for name, vals in reward_updates.items():
+                    print(f"    - {name}: {vals['old']:.2f} -> {vals['new']:.2f}")
+            
+            if termination_updates:
+                print("  终止条件变化:")
+                for name, vals in termination_updates.items():
+                    old_val = vals['old'] if vals['old'] is not None else 0.0
+                    old_deg = old_val * 57.3
+                    new_deg = vals['new'] * 57.3
+                    print(f"    - {name}: {old_val:.2f} rad ({old_deg:.0f}°) -> {vals['new']:.2f} rad ({new_deg:.0f}°)")
+            
+            print("=" * 70 + "\n")
+            
+            # 更新状态
+            state.current_stage = new_stage
+            state.stage_stable_count = 0
+            state.stage_enter_step = step_counter
+            return True
+    else:
+        state.stage_stable_count = 0
+    
+    return False
+
+
+# ============================================================================
 #                         主入口函数
 # ============================================================================
 
@@ -391,6 +456,7 @@ def adaptive_terrain_levels(
         1. 自动检测当前训练阶段
         2. 阶段切换时自动更新奖励权重和终止条件
         3. 根据阶段调用不同的底层课程学习策略
+        4. [重要] terrain_levels 更新后同步检查阶段切换
     
     Args:
         env: 强化学习环境实例
@@ -406,6 +472,7 @@ def adaptive_terrain_levels(
             terrain_levels = CurrTerm(func=mdp.adaptive_terrain_levels)
     """
     state = _get_adaptive_state()
+    terrain: TerrainImporter = env.scene.terrain
     
     # ==================== 1. 收集指标 ====================
     # 获取当前 episode 长度（使用重置环境的长度，因为这些是刚结束的 episode）
@@ -414,58 +481,12 @@ def adaptive_terrain_levels(
         mean_finished_length = finished_lengths.mean().item()
         state.episode_lengths.append(mean_finished_length)
     
-    # 获取地形等级
-    terrain: TerrainImporter = env.scene.terrain
-    current_terrain_level = terrain.terrain_levels.float().mean().item()
-    state.terrain_levels.append(current_terrain_level)
+    # 获取地形等级（更新前的值）
+    old_terrain_level = terrain.terrain_levels.float().mean().item()
+    state.terrain_levels.append(old_terrain_level)
     
-    # ==================== 2. 阶段检测（每 500 步检查一次）====================
-    step_counter = env.common_step_counter
-    check_interval = 500  # 从 1000 降低到 500，加快响应
-    
-    if step_counter - state.last_update_step >= check_interval:
-        state.last_update_step = step_counter
-        
-        # 计算滑动平均
-        if len(state.episode_lengths) > 0:
-            avg_length = sum(state.episode_lengths) / len(state.episode_lengths)
-        else:
-            avg_length = 0.0
-        
-        if len(state.terrain_levels) > 0:
-            avg_terrain = sum(state.terrain_levels) / len(state.terrain_levels)
-        else:
-            avg_terrain = 0.0
-        
-        # 检测新阶段
-        new_stage = _detect_stage(avg_length, avg_terrain)
-        
-        # 检查是否满足阶段切换条件
-        min_duration_met = (step_counter - state.stage_enter_step) >= state.min_stage_duration
-        
-        if new_stage != state.current_stage and min_duration_met:
-            state.stage_stable_count += 1
-            
-            # 连续 3 次检测到相同的新阶段才切换（从 5 降低到 3）
-            if state.stage_stable_count >= 3:
-                old_stage = state.current_stage
-                
-                # 执行参数更新
-                reward_updates = _update_reward_weights(env, new_stage)
-                termination_updates = _update_termination_params(env, new_stage)
-                
-                # 打印日志
-                _log_stage_transition(
-                    old_stage, new_stage, avg_length, avg_terrain,
-                    reward_updates, termination_updates
-                )
-                
-                # 更新状态
-                state.current_stage = new_stage
-                state.stage_stable_count = 0
-                state.stage_enter_step = step_counter
-        else:
-            state.stage_stable_count = 0
+    # ==================== 2. 定期阶段检测 ====================
+    _check_and_update_stage(env, state, force_check=False)
     
     # ==================== 3. 调用底层课程学习函数 ====================
     # 如果没有环境需要重置，直接返回当前地形等级
@@ -474,13 +495,30 @@ def adaptive_terrain_levels(
     
     stage = state.current_stage
     params = STAGE_CONFIGS[stage]
-    
     curriculum_type = params.get("curriculum_type", "survival")
     
     if curriculum_type == "survival":
-        return _call_survival_curriculum(env, env_ids, asset_cfg, params)
+        result = _call_survival_curriculum(env, env_ids, asset_cfg, params)
     else:  # climb
-        return _call_climb_curriculum(env, env_ids, asset_cfg, params)
+        result = _call_climb_curriculum(env, env_ids, asset_cfg, params)
+    
+    # ==================== 4. [重要修复] terrain_levels 更新后同步检查 ====================
+    # 获取更新后的地形等级
+    new_terrain_level = terrain.terrain_levels.float().mean().item()
+    
+    # 如果 terrain_level 发生了显著变化，立即更新滑动窗口并检查阶段
+    terrain_change = abs(new_terrain_level - old_terrain_level)
+    if terrain_change > 0.1:  # 变化超过 0.1 视为显著变化
+        # 更新滑动窗口中的最新值
+        if len(state.terrain_levels) > 0:
+            state.terrain_levels[-1] = new_terrain_level
+        else:
+            state.terrain_levels.append(new_terrain_level)
+        
+        # 强制检查阶段切换（确保自适应参数与 terrain_level 同步）
+        _check_and_update_stage(env, state, force_check=True)
+    
+    return result
 
 
 # ============================================================================
@@ -502,6 +540,79 @@ def get_stage_name(stage: int = None) -> str:
 def reset_adaptive_state():
     """重置自适应状态（用于新训练开始时）"""
     _get_adaptive_state().reset()
+
+
+def get_adaptive_state_dict() -> dict:
+    """
+    获取自适应状态字典（用于保存到 checkpoint）
+    
+    Returns:
+        包含自适应状态的字典
+    """
+    state = _get_adaptive_state()
+    return {
+        "current_stage": state.current_stage,
+        "episode_lengths": list(state.episode_lengths),
+        "terrain_levels": list(state.terrain_levels),
+        "stage_stable_count": state.stage_stable_count,
+        "last_update_step": state.last_update_step,
+        "stage_enter_step": state.stage_enter_step,
+    }
+
+
+def load_adaptive_state_dict(state_dict: dict):
+    """
+    从字典加载自适应状态（用于从 checkpoint 恢复）
+    
+    Args:
+        state_dict: 包含自适应状态的字典
+    """
+    state = _get_adaptive_state()
+    state.reset()
+    
+    state.current_stage = state_dict.get("current_stage", 0)
+    state.stage_stable_count = state_dict.get("stage_stable_count", 0)
+    state.last_update_step = state_dict.get("last_update_step", 0)
+    state.stage_enter_step = state_dict.get("stage_enter_step", 0)
+    
+    # 恢复 deque
+    for length in state_dict.get("episode_lengths", []):
+        state.episode_lengths.append(length)
+    for level in state_dict.get("terrain_levels", []):
+        state.terrain_levels.append(level)
+    
+    # 计算平均值用于打印
+    avg_length = sum(state.episode_lengths) / len(state.episode_lengths) if state.episode_lengths else 0
+    avg_terrain = sum(state.terrain_levels) / len(state.terrain_levels) if state.terrain_levels else 0
+    
+    print(f"[Adaptive State] 从 checkpoint 恢复阶段: Stage {state.current_stage} ({get_stage_name(state.current_stage)})")
+    print(f"    - mean_episode_length: {avg_length:.1f}")
+    print(f"    - mean_terrain_level: {avg_terrain:.2f}")
+
+
+def init_adaptive_state_from_metrics(mean_episode_length: float, mean_terrain_level: float = 0.0):
+    """
+    根据当前训练指标初始化自适应状态（用于恢复训练时）
+    
+    Args:
+        mean_episode_length: 当前平均 episode 长度
+        mean_terrain_level: 当前平均地形等级
+    """
+    state = _get_adaptive_state()
+    state.reset()
+    
+    # 根据指标检测应该处于的阶段
+    stage = _detect_stage(mean_episode_length, mean_terrain_level)
+    state.current_stage = stage
+    
+    # 预填充 deque 以避免需要重新积累数据
+    for _ in range(50):
+        state.episode_lengths.append(mean_episode_length)
+        state.terrain_levels.append(mean_terrain_level)
+    
+    print(f"[Adaptive State] 根据指标初始化阶段: Stage {stage} ({get_stage_name(stage)})")
+    print(f"    - mean_episode_length: {mean_episode_length:.1f}")
+    print(f"    - mean_terrain_level: {mean_terrain_level:.2f}")
 
 
 def get_ppo_params(stage: int = None) -> dict:
@@ -578,4 +689,65 @@ def update_ppo_params(alg, stage: int = None) -> dict:
             alg.desired_kl = new_kl
             updates["desired_kl"] = {"old": old_kl, "new": new_kl}
     
+    return updates
+
+
+def apply_stage_params(env, alg, stage: int = None) -> dict:
+    """
+    应用指定阶段的所有参数（奖励权重、终止条件、PPO 参数）
+    
+    用于训练开始时初始化，确保所有参数与当前阶段匹配。
+    
+    Args:
+        env: 环境实例（用于更新奖励权重和终止条件）
+        alg: PPO 算法实例（用于更新 PPO 参数）
+        stage: 目标阶段，如果为 None 则使用当前阶段
+    
+    Returns:
+        包含所有更新信息的字典
+    """
+    if stage is None:
+        stage = get_current_stage()
+    
+    updates = {}
+    
+    # 更新奖励权重
+    reward_updates = _update_reward_weights(env, stage)
+    if reward_updates:
+        updates["rewards"] = reward_updates
+    
+    # 更新终止条件
+    termination_updates = _update_termination_params(env, stage)
+    if termination_updates:
+        updates["terminations"] = termination_updates
+    
+    # 更新 PPO 参数
+    ppo_updates = update_ppo_params(alg, stage)
+    if ppo_updates:
+        updates["ppo"] = ppo_updates
+    
+    # 打印应用的参数
+    stage_name = get_stage_name(stage)
+    print(f"\n[Adaptive] 应用 Stage {stage} ({stage_name}) 的参数:")
+    
+    if reward_updates:
+        print("  奖励权重:")
+        for name, vals in reward_updates.items():
+            print(f"    - {name}: {vals['old']:.2f} -> {vals['new']:.2f}")
+    
+    if termination_updates:
+        print("  终止条件:")
+        for name, vals in termination_updates.items():
+            old_val = vals['old'] if vals['old'] is not None else 0.0
+            print(f"    - {name}: {old_val:.2f} -> {vals['new']:.2f}")
+    
+    if ppo_updates:
+        print("  PPO 参数:")
+        for name, vals in ppo_updates.items():
+            if name == "learning_rate":
+                print(f"    - {name}: {vals['old']:.2e} -> {vals['new']:.2e}")
+            else:
+                print(f"    - {name}: {vals['old']:.4f} -> {vals['new']:.4f}")
+    
+    print()
     return updates
