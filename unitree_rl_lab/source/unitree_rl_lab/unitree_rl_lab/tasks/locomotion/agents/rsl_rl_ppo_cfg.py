@@ -185,7 +185,7 @@ class StairBlindPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         #
         # 0.01 是标准值，保持适度探索
         # 盲爬任务需要探索不同的攀爬策略
-        entropy_coef=0.01,
+        entropy_coef=0.012,
         
         # -------------------- 训练优化参数 --------------------
         # num_learning_epochs: 每次 rollout 后的训练轮数

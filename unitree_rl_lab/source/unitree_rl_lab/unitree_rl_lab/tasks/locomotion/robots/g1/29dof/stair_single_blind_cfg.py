@@ -257,7 +257,6 @@ class StairEventCfg:
 class StairCommandsCfg:
     """
     楼梯任务命令配置类
-
     专注于前进方向，限制横向和旋转速度
     """
 
