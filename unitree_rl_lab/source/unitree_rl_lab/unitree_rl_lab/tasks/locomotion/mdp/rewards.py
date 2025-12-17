@@ -333,20 +333,31 @@ Stair climbing rewards.
 
 
 def upward_progress(
-    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    delta_scale: float = 50.0,
+    progress_scale: float = 1.0,
 ) -> torch.Tensor:
     """
-    向上进展奖励：鼓励机器人向上攀爬楼梯
+    向上进展奖励：鼓励机器人向上攀爬楼梯（增强版）
 
-    计算每步的高度增量，对正向增量给予奖励。
-    使用累计高度差避免"跳起来再落回去"骗奖励的情况。
+    改进点：
+        1. 放大高度增量信号（delta_scale=50），使每步~0.002m的变化产生~0.1的奖励
+        2. 使用 tanh 归一化，返回值范围 [0, 1]
+        3. 累计进展使用 tanh，避免硬性上限
+
+    计算公式：
+        reward = tanh(delta_scale * max(height_delta, 0))  # 即时上升奖励
+               + tanh(progress_scale * total_progress)     # 累计进展奖励
 
     Args:
         env: 环境实例
         asset_cfg: 机器人资产配置
+        delta_scale: 高度增量放大系数（默认50，使0.002m→0.1信号）
+        progress_scale: 累计进展放大系数（默认1.0，1m进展→0.76奖励）
 
     Returns:
-        奖励张量，形状为 (num_envs,)
+        奖励张量，形状为 (num_envs,)，范围约 [0, 2]
     """
     asset: RigidObject = env.scene[asset_cfg.name]
 
@@ -364,12 +375,11 @@ def upward_progress(
     if env._initial_height.shape != current_height.shape:
         env._initial_height = current_height.clone()
 
-    # 按回合重置缓存，避免跨回合累计
-    if hasattr(env, "reset_buf"):
-        reset_mask = env.reset_buf > 0
-        if torch.any(reset_mask):
-            env._prev_base_height = torch.where(reset_mask, current_height, env._prev_base_height)
-            env._initial_height = torch.where(reset_mask, current_height, env._initial_height)
+    # 使用 episode_length_buf == 1 检测新 episode（更可靠的重置时机）
+    new_episode_mask = env.episode_length_buf == 1
+    if torch.any(new_episode_mask):
+        env._prev_base_height = torch.where(new_episode_mask, current_height, env._prev_base_height)
+        env._initial_height = torch.where(new_episode_mask, current_height, env._initial_height)
 
     # 计算高度增量
     height_delta = current_height - env._prev_base_height
@@ -377,15 +387,73 @@ def upward_progress(
     # 更新上一步高度
     env._prev_base_height = current_height.clone()
 
-    # 对正向高度增量给予奖励，负向增量给予较小惩罚
-    # 使用 clamp 避免过大的奖励/惩罚
-    reward = torch.clamp(height_delta, -0.1, 0.2)
+    # 即时上升奖励：只奖励正向增量，使用 tanh 归一化
+    # delta_scale=50 使 0.002m 的增量产生 tanh(0.1)≈0.1 的奖励
+    instant_reward = torch.tanh(delta_scale * torch.clamp(height_delta, min=0.0))
 
-    # 额外奖励：相对于初始高度的总进展
+    # 累计进展奖励：相对于初始高度的总上升
+    # progress_scale=1.0 使 1m 的累计进展产生 tanh(1)≈0.76 的奖励
     total_progress = current_height - env._initial_height
-    progress_bonus = torch.clamp(total_progress * 0.1, 0, 0.5)
+    progress_reward = torch.tanh(progress_scale * torch.clamp(total_progress, min=0.0))
 
-    return reward + progress_bonus
+    return instant_reward + progress_reward
+
+
+def radial_distance_progress(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """
+    径向进展奖励：鼓励机器人离开出生位置（适用于 InvertedPyramidStairs 地形）
+
+    在倒金字塔楼梯地形中，机器人出生在中心（最低点），需要向外爬升。
+    此奖励计算机器人当前位置与出生位置的水平距离（XY平面），
+    使用 tanh 平滑处理避免过大的奖励值。
+
+    设计原理：
+        - 不依赖高度变化（每步高度变化太小，信号弱）
+        - 直接奖励水平移动距离
+        - 与速度跟踪奖励形成互补：速度跟踪鼓励按命令移动，径向奖励鼓励实际位移
+        - 返回值范围 [0, 1]，便于权重调整
+
+    Args:
+        env: 环境实例
+        asset_cfg: 机器人资产配置
+
+    Returns:
+        奖励张量，形状为 (num_envs,)，范围 [0, 1]
+    """
+    asset: RigidObject = env.scene[asset_cfg.name]
+
+    # 获取当前 XY 位置
+    current_pos_xy = asset.data.root_pos_w[:, :2]
+
+    # 初始化初始位置缓存
+    if not hasattr(env, "_radial_initial_pos_xy"):
+        env._radial_initial_pos_xy = current_pos_xy.clone()
+
+    # 形状不一致时进行重置（例如环境数量变化时）
+    if env._radial_initial_pos_xy.shape != current_pos_xy.shape:
+        env._radial_initial_pos_xy = current_pos_xy.clone()
+
+    # 使用 episode_length_buf == 1 检测新 episode 的第一步
+    # 注意：在奖励函数被调用时，episode_length_buf 已经 +1 了
+    new_episode_mask = env.episode_length_buf == 1
+    if torch.any(new_episode_mask):
+        env._radial_initial_pos_xy = torch.where(
+            new_episode_mask.unsqueeze(-1).expand_as(current_pos_xy),
+            current_pos_xy,
+            env._radial_initial_pos_xy,
+        )
+
+    # 计算径向距离（离初始位置的水平距离）
+    radial_distance = torch.norm(current_pos_xy - env._radial_initial_pos_xy, dim=1)
+
+    # 使用 tanh 平滑奖励，避免过大
+    # scale=0.5 表示移动 2m 时奖励约为 0.76，移动 4m 时约为 0.96
+    reward = torch.tanh(radial_distance * 0.5)
+
+    return reward
 
 
 def base_height_relative(

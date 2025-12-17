@@ -77,7 +77,7 @@ STAIR_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
             proportion=0.3,  # 对应 Level 3-5
             step_height_range=(0.06, 0.10),  # 6-10cm 阶高（更低）
             step_width=0.38,                  # 38cm 踏面宽度（更宽）
-            platform_width=0.8,               # 减小平台，让机器人更快接触楼梯
+            platform_width=1.5,               # 减小平台，让机器人更快接触楼梯
             border_width=1.0,
             holes=False,
         ),
@@ -87,7 +87,7 @@ STAIR_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
             proportion=0.2,  # 对应 Level 6-7
             step_height_range=(0.10, 0.14),  # 10-14cm 阶高
             step_width=0.34,                  # 34cm 踏面宽度
-            platform_width=0.6,               # 减小平台
+            platform_width=1.5,               # 减小平台
             border_width=1.0,
             holes=False,
         ),
@@ -97,7 +97,7 @@ STAIR_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
             proportion=0.2,  # 对应 Level 8-9
             step_height_range=(0.14, 0.18),  # 14-18cm 阶高
             step_width=0.30,                  # 30cm 踏面宽度
-            platform_width=0.5,               # 减小平台
+            platform_width=1.5,               # 减小平台
             border_width=1.0,
             holes=False,
         ),
@@ -419,13 +419,23 @@ class StairBlindRewardsCfg:
     # [重要修复] 降低 alive 奖励
     # 原值 5.0 太高，机器人学会“静止拿奖励”
     # 2.0 让存活仍然重要，但不会压制前进动力
-    alive = RewTerm(func=mdp.is_alive, weight=2.0)
+    alive = RewTerm(func=mdp.is_alive, weight=1.0)
 
-    # [重要修复] 平地阶段禁用 upward_progress
-    # 在平地上这个奖励几乎为 0，不能激励前进
+    # [改进版] upward_progress：增强高度进展信号
+    # 改进：1) 放大高度增量50倍 2) 使用tanh归一化 3) 返回值范围[0,2]
+    # delta_scale=50 使每步0.002m→0.1信号，progress_scale=1.0 使1m累计→0.76
     upward_progress = RewTerm(
         func=mdp.upward_progress,
-        weight=0.0,  # 从 1.5 改为 0，平地阶段禁用
+        weight=1.0,  # 返回值[0,2]，加权后[0,2]
+        params={"delta_scale": 50.0, "progress_scale": 1.0},
+    )
+
+    # [方案C] 径向进展奖励：鼓励离开出生位置
+    # 适用于 InvertedPyramidStairs 地形（中心低、边缘高）
+    # 返回值范围 [0, 1]，权重 2.0 使其与速度跟踪(3.0)形成互补
+    radial_distance_progress = RewTerm(
+        func=mdp.radial_distance_progress,
+        weight=2.0,
     )
 
     # ====================== 基座运动正则化 ======================
@@ -471,7 +481,7 @@ class StairBlindRewardsCfg:
 
     # ====================== 姿态奖励 ======================
     # 增强姿态惩罚，保持躯干直立（替代 base_height_l2 的作用）
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)
+    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-4.0)
 
     # 盲爬模式：移除 base_height_l2
     # 原因：在楼梯上，机器人的绝对高度会随着攀爬而增加
@@ -559,8 +569,8 @@ class StairTerminationsCfg:
     bad_orientation = DoneTerm(
         func=mdp.bad_orientation_with_grace,
         params={
-            "limit_angle": 1.3,      # 74° 倾斜角阈值
-            "grace_steps": 10,       # 保护期 10 步
+            "limit_angle": 1.3,      # 86° 倾斜角阈值（放宽，训练初期更宽容）
+            "grace_steps": 25,       # 保护期 25 步（延长稳定时间）
         },
     )
 
@@ -573,27 +583,20 @@ class StairCurriculumCfg:
     """
     盲爬楼梯任务课程学习配置
     
-    [升级] 使用自适应课程学习 adaptive_terrain_levels
-    
-    功能：
-        - 自动检测训练阶段（基于 episode_length 和 terrain_level）
-        - 动态调整奖励权重和终止条件参数
-        - 根据阶段自动切换底层课程策略（survival/climb）
-    
-    训练阶段：
-        Stage 0: 初始探索期 (mean_episode_length < 100)
-        Stage 1: 站立稳定期 (100 ≤ mean_episode_length < 300)
-        Stage 2: 行走学习期 (300 ≤ mean_episode_length < 600)
-        Stage 3: 楼梯适应期 (mean_episode_length ≥ 600, terrain_level < 3)
-        Stage 4: 楼梯精通期 (mean_episode_length ≥ 600, terrain_level ≥ 3)
-    
-    详细规划文档：docs/adaptive_training_plan.md
+    使用基础地形课程学习 terrain_levels_vel
+    根据机器人表现自动调整地形难度等级
     """
 
-    # [升级] 使用自适应课程学习（自动检测阶段并调整参数）
-    terrain_levels = CurrTerm(func=mdp.adaptive_terrain_levels)
+    # 基于存活率的地形课程学习（更适合训练初期）
+    terrain_levels = CurrTerm(
+        func=mdp.terrain_levels_survival,
+        params={
+            "survival_ratio_upgrade": 0.5,    # 存活 50% 时间则升级
+            "survival_ratio_downgrade": 0.15, # 存活 < 15% 则降级
+        },
+    )
     
-    # 速度命令课程学习（保持不变）
+    # 速度命令课程学习
     lin_vel_cmd_levels = CurrTerm(func=mdp.lin_vel_cmd_levels)
 
 
@@ -667,7 +670,7 @@ class StairBlindEnvCfg(ManagerBasedRLEnvCfg):
         # 影响：
         #   - 值越大，机器人有更多时间完成任务
         #   - 值越小，训练迭代更快，但可能学不到长期行为
-        self.episode_length_s = 20.0
+        self.episode_length_s = 40.0
         
         # ======================== 物理仿真配置 ========================
         # sim.dt: 物理仿真的时间步长（秒）

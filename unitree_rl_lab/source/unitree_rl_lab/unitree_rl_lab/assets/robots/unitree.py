@@ -35,8 +35,8 @@ from unitree_rl_lab.assets.robots import unitree_actuators
 #                           路径配置
 # ============================================================================
 
-UNITREE_MODEL_DIR = "/root/Document/unitree/unitree_model"  # USD 模型文件目录（Omniverse 原生格式）
-UNITREE_ROS_DIR = "/root/Document/unitree/unitree_ros"      # URDF 模型文件目录（ROS 标准格式）
+UNITREE_MODEL_DIR = "e:/Aunitree/unitree_model"  # USD 模型文件目录（Omniverse 原生格式）
+UNITREE_ROS_DIR = "e:/Aunitree/unitree_ros"      # URDF 模型文件目录（ROS 标准格式）
 
 # 注意：请根据实际安装路径修改上述目录
 
