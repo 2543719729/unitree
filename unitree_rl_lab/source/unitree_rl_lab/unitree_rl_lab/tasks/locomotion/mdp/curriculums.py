@@ -332,6 +332,45 @@ def terrain_levels_climb(
     return torch.mean(terrain.terrain_levels.float())
 
 
+def terrain_levels_survival_with_height(
+    env: ManagerBasedRLEnv,
+    env_ids: Sequence[int],
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    survival_ratio_upgrade: float = 0.8,
+    survival_ratio_downgrade: float = 0.3,
+    upgrade_height: float = 0.2,
+    flat_max_terrain_level: int = -1,
+    flat_min_distance: float = 0.0,
+) -> torch.Tensor:
+    asset: Articulation = env.scene[asset_cfg.name]
+    terrain: TerrainImporter = env.scene.terrain
+
+    survival_ratio = env.episode_length_buf[env_ids].float() / env.max_episode_length
+
+    height_delta = (
+        asset.data.root_pos_w[env_ids, 2]
+        - env.scene.env_origins[env_ids, 2]
+        - asset.data.default_root_state[env_ids, 2]
+    )
+
+    is_flat_stage = terrain.terrain_levels[env_ids] <= flat_max_terrain_level
+
+    flat_stage_upgrade_ok = is_flat_stage
+    if flat_min_distance > 0.0:
+        distance_xy = torch.norm(asset.data.root_pos_w[env_ids, :2] - env.scene.env_origins[env_ids, :2], dim=1)
+        flat_stage_upgrade_ok = flat_stage_upgrade_ok & (distance_xy > flat_min_distance)
+
+    move_up = (survival_ratio > survival_ratio_upgrade) & (
+        flat_stage_upgrade_ok | ((~is_flat_stage) & (height_delta > upgrade_height))
+    )
+    move_down = survival_ratio < survival_ratio_downgrade
+    move_down = move_down & ~move_up
+
+    terrain.update_env_origins(env_ids, move_up, move_down)
+
+    return torch.mean(terrain.terrain_levels.float())
+
+
 def terrain_levels_height(
     env: ManagerBasedRLEnv,
     env_ids: Sequence[int],

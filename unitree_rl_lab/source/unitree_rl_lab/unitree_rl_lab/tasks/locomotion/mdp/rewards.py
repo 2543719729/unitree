@@ -229,6 +229,116 @@ def foot_clearance_reward(
     return torch.exp(-torch.sum(reward, dim=1) / std)
 
 
+def foot_clearance_reward_swing(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    target_height: float,
+    std: float,
+    tanh_mult: float,
+    command_name: str = "base_velocity",
+    cmd_threshold: float = 0.1,
+) -> torch.Tensor:
+    asset: RigidObject = env.scene[asset_cfg.name]
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+
+    is_contact = contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids] > 0
+    is_swing = ~is_contact
+
+    foot_z = asset.data.body_pos_w[:, asset_cfg.body_ids, 2]
+    foot_vel_xy = torch.linalg.norm(asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :2], dim=-1)
+
+    height_score = torch.exp(-0.5 * torch.square((foot_z - target_height) / std))
+    vel_score = torch.tanh(tanh_mult * torch.clamp(foot_vel_xy - 0.05, min=0.0))
+
+    per_foot = height_score * vel_score * is_swing.float()
+    reward = torch.mean(per_foot, dim=1)
+
+    cmd_norm = torch.norm(env.command_manager.get_command(command_name), dim=1)
+    return reward * (cmd_norm > cmd_threshold)
+
+
+def feet_step_up_touchdown_reward(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    command_name: str = "base_velocity",
+    cmd_threshold: float = 0.1,
+    force_threshold: float = 1.0,
+    stable_contact_time: float = 0.03,
+    min_air_time: float = 0.05,
+    min_step_up: float = 0.015,
+    tanh_mult: float = 50.0,
+) -> torch.Tensor:
+    asset: RigidObject = env.scene[asset_cfg.name]
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+
+    body_ids = sensor_cfg.body_ids
+    try:
+        body_ids_empty = body_ids is None or len(body_ids) == 0
+    except TypeError:
+        body_ids_empty = body_ids is None
+    if body_ids_empty:
+        body_ids = asset_cfg.body_ids
+    try:
+        body_ids_empty = body_ids is None or len(body_ids) == 0
+    except TypeError:
+        body_ids_empty = body_ids is None
+    if body_ids_empty:
+        raise RuntimeError("No body_ids resolved for feet_step_up_touchdown_reward.")
+
+    if hasattr(contact_sensor.data, "net_forces_w_history") and contact_sensor.data.net_forces_w_history is not None:
+        force_norm = torch.linalg.norm(
+            contact_sensor.data.net_forces_w_history[:, :, body_ids, :], dim=-1
+        ).amax(dim=1)
+    else:
+        force_norm = torch.linalg.norm(contact_sensor.data.net_forces_w[:, body_ids, :], dim=-1)
+
+    is_contact = force_norm > force_threshold
+
+    contact_time = None
+    if hasattr(contact_sensor.data, "current_contact_time") and contact_sensor.data.current_contact_time is not None:
+        contact_time = contact_sensor.data.current_contact_time[:, body_ids]
+        stable_contact = (contact_time > stable_contact_time) & is_contact
+    else:
+        stable_contact = is_contact
+
+    if not hasattr(contact_sensor.data, "last_air_time") or contact_sensor.data.last_air_time is None:
+        raise RuntimeError("Activate ContactSensor's track_air_time!")
+    last_air_time = contact_sensor.data.last_air_time[:, body_ids]
+
+    if contact_time is not None:
+        stable_touchdown = stable_contact & ((contact_time - env.step_dt) <= stable_contact_time)
+        touchdown = stable_touchdown & (last_air_time > min_air_time)
+    else:
+        first_contact = contact_sensor.compute_first_contact(env.step_dt)[:, body_ids]
+        touchdown = first_contact & stable_contact & (last_air_time > min_air_time)
+
+    foot_z = asset.data.body_pos_w[:, body_ids, 2]
+    if not hasattr(env, "_feet_step_up_last_touchdown_z"):
+        env._feet_step_up_last_touchdown_z = foot_z.clone()
+    if env._feet_step_up_last_touchdown_z.shape != foot_z.shape:
+        env._feet_step_up_last_touchdown_z = foot_z.clone()
+
+    new_episode_mask = env.episode_length_buf == 1
+    if torch.any(new_episode_mask):
+        env._feet_step_up_last_touchdown_z = torch.where(
+            new_episode_mask.unsqueeze(1), foot_z, env._feet_step_up_last_touchdown_z
+        )
+
+    step_up = foot_z - env._feet_step_up_last_touchdown_z
+    step_up = torch.clamp(step_up - min_step_up, min=0.0)
+    per_foot_reward = torch.tanh(tanh_mult * step_up) * touchdown.float()
+    reward = torch.sum(per_foot_reward, dim=1)
+
+    if torch.any(touchdown):
+        env._feet_step_up_last_touchdown_z = torch.where(touchdown, foot_z, env._feet_step_up_last_touchdown_z)
+
+    cmd_norm = torch.norm(env.command_manager.get_command(command_name), dim=1)
+    upright = torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0.0, 0.7) / 0.7
+    return reward * (cmd_norm > cmd_threshold) * upright
+
+
 def feet_too_near(
     env: ManagerBasedRLEnv, threshold: float = 0.2, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
@@ -253,6 +363,40 @@ def feet_contact_without_cmd(
     return reward * (command_norm < 0.1)
 
 
+def feet_slide_stairs(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+    asset_cfg: SceneEntityCfg,
+    force_threshold: float = 1.0,
+    stable_contact_time: float = 0.05,
+    slip_velocity_deadzone: float = 0.1,
+    tanh_mult: float = 2.0,
+) -> torch.Tensor:
+    asset: RigidObject = env.scene[asset_cfg.name]
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+
+    if hasattr(contact_sensor.data, "net_forces_w_history") and contact_sensor.data.net_forces_w_history is not None:
+        force_norm = torch.linalg.norm(
+            contact_sensor.data.net_forces_w_history[:, :, sensor_cfg.body_ids, :], dim=-1
+        ).amax(dim=1)
+    else:
+        force_norm = torch.linalg.norm(contact_sensor.data.net_forces_w[:, sensor_cfg.body_ids, :], dim=-1)
+
+    is_contact = force_norm > force_threshold
+
+    if hasattr(contact_sensor.data, "current_contact_time") and contact_sensor.data.current_contact_time is not None:
+        stable_contact = contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids] > stable_contact_time
+    else:
+        stable_contact = is_contact
+
+    body_vel_xy = asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :2]
+    slip_speed = torch.linalg.norm(body_vel_xy, dim=-1)
+    slip = torch.clamp(slip_speed - slip_velocity_deadzone, min=0.0)
+    slip = torch.tanh(tanh_mult * slip)
+
+    return torch.sum(slip * (is_contact & stable_contact), dim=1)
+
+
 def air_time_variance_penalty(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     """Penalize variance in the amount of time each foot spends in the air/on the ground relative to each other"""
     # extract the used quantities (to enable type-hinting)
@@ -265,6 +409,17 @@ def air_time_variance_penalty(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg
     return torch.var(torch.clip(last_air_time, max=0.5), dim=1) + torch.var(
         torch.clip(last_contact_time, max=0.5), dim=1
     )
+
+
+def air_time_variance_penalty_with_cmd(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+    command_name: str = "base_velocity",
+    cmd_threshold: float = 0.1,
+) -> torch.Tensor:
+    penalty = air_time_variance_penalty(env, sensor_cfg)
+    cmd_norm = torch.norm(env.command_manager.get_command(command_name), dim=1)
+    return penalty * (cmd_norm > cmd_threshold)
 
 
 """
@@ -324,6 +479,101 @@ def joint_mirror(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirror_joint
         )
     reward *= 1 / len(mirror_joints) if len(mirror_joints) > 0 else 0
     return reward
+
+
+def joint_symmetry_out_of_phase(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    pitch_mirror_joints: list[list[str]],
+    roll_mirror_joints: list[list[str]] | None = None,
+    yaw_mirror_joints: list[list[str]] | None = None,
+    sensor_cfg: SceneEntityCfg | None = None,
+    force_threshold: float = 1.0,
+    stable_contact_time: float = 0.03,
+    roll_scale: float = 0.0,
+    yaw_scale: float = 0.0,
+) -> torch.Tensor:
+    asset: Articulation = env.scene[asset_cfg.name]
+
+    if roll_mirror_joints is None:
+        roll_mirror_joints = []
+    if yaw_mirror_joints is None:
+        yaw_mirror_joints = []
+
+    if not hasattr(env, "_joint_symmetry_out_of_phase_cache") or env._joint_symmetry_out_of_phase_cache is None:
+        def _cache_pairs(pairs: list[list[str]]) -> list[tuple[int, int]]:
+            cached: list[tuple[int, int]] = []
+            for joint_pair in pairs:
+                left = asset.find_joints(joint_pair[0])[0][0]
+                right = asset.find_joints(joint_pair[1])[0][0]
+                cached.append((left, right))
+            return cached
+
+        env._joint_symmetry_out_of_phase_cache = {
+            "pitch": _cache_pairs(pitch_mirror_joints),
+            "roll": _cache_pairs(roll_mirror_joints),
+            "yaw": _cache_pairs(yaw_mirror_joints),
+        }
+
+    if sensor_cfg is None:
+        w_in_phase = torch.zeros(env.num_envs, device=env.device, dtype=torch.float)
+        w_out_of_phase = torch.ones(env.num_envs, device=env.device, dtype=torch.float)
+    else:
+        contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+        if hasattr(contact_sensor.data, "net_forces_w_history") and contact_sensor.data.net_forces_w_history is not None:
+            force_norm = torch.linalg.norm(
+                contact_sensor.data.net_forces_w_history[:, :, sensor_cfg.body_ids, :], dim=-1
+            ).amax(dim=1)
+        else:
+            force_norm = torch.linalg.norm(contact_sensor.data.net_forces_w[:, sensor_cfg.body_ids, :], dim=-1)
+
+        is_contact = force_norm > force_threshold
+        if hasattr(contact_sensor.data, "current_contact_time") and contact_sensor.data.current_contact_time is not None:
+            is_contact = is_contact & (contact_sensor.data.current_contact_time[:, sensor_cfg.body_ids] > stable_contact_time)
+
+        if is_contact.shape[-1] < 2:
+            w_in_phase = torch.zeros(env.num_envs, device=env.device, dtype=torch.float)
+            w_out_of_phase = torch.zeros(env.num_envs, device=env.device, dtype=torch.float)
+        else:
+            left_contact = is_contact[:, 0]
+            right_contact = is_contact[:, 1]
+            w_in_phase = (left_contact & right_contact).float()
+            w_out_of_phase = (left_contact ^ right_contact).float()
+
+    w_active = w_in_phase + w_out_of_phase
+
+    q = asset.data.joint_pos
+    q0 = asset.data.default_joint_pos
+
+    pitch_pairs: list[tuple[int, int]] = env._joint_symmetry_out_of_phase_cache["pitch"]
+    roll_pairs: list[tuple[int, int]] = env._joint_symmetry_out_of_phase_cache["roll"]
+    yaw_pairs: list[tuple[int, int]] = env._joint_symmetry_out_of_phase_cache["yaw"]
+
+    pitch_pen = torch.zeros(env.num_envs, device=env.device)
+    for left_id, right_id in pitch_pairs:
+        l_rel = q[:, left_id] - q0[:, left_id]
+        r_rel = q[:, right_id] - q0[:, right_id]
+        pitch_pen = pitch_pen + w_out_of_phase * torch.square(l_rel + r_rel) + w_in_phase * torch.square(l_rel - r_rel)
+    if len(pitch_pairs) > 0:
+        pitch_pen = pitch_pen * (1.0 / len(pitch_pairs))
+
+    roll_pen = torch.zeros(env.num_envs, device=env.device)
+    for left_id, right_id in roll_pairs:
+        l_rel = q[:, left_id] - q0[:, left_id]
+        r_rel = q[:, right_id] - q0[:, right_id]
+        roll_pen = roll_pen + w_active * torch.square(l_rel - r_rel)
+    if len(roll_pairs) > 0:
+        roll_pen = roll_pen * (1.0 / len(roll_pairs))
+
+    yaw_pen = torch.zeros(env.num_envs, device=env.device)
+    for left_id, right_id in yaw_pairs:
+        l_rel = q[:, left_id] - q0[:, left_id]
+        r_rel = q[:, right_id] - q0[:, right_id]
+        yaw_pen = yaw_pen + w_active * torch.square(l_rel - r_rel)
+    if len(yaw_pairs) > 0:
+        yaw_pen = yaw_pen * (1.0 / len(yaw_pairs))
+
+    return pitch_pen + roll_scale * roll_pen + yaw_scale * yaw_pen
 
 
 """
@@ -399,6 +649,31 @@ def upward_progress(
     return instant_reward + progress_reward
 
 
+def height_drop_from_peak(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    deadzone: float = 0.03,
+    scale: float = 20.0,
+) -> torch.Tensor:
+    asset: RigidObject = env.scene[asset_cfg.name]
+    current_height = asset.data.root_pos_w[:, 2]
+
+    if not hasattr(env, "_peak_base_height"):
+        env._peak_base_height = current_height.clone()
+
+    if env._peak_base_height.shape != current_height.shape:
+        env._peak_base_height = current_height.clone()
+
+    new_episode_mask = env.episode_length_buf == 1
+    if torch.any(new_episode_mask):
+        env._peak_base_height = torch.where(new_episode_mask, current_height, env._peak_base_height)
+
+    env._peak_base_height = torch.maximum(env._peak_base_height, current_height)
+
+    drop = torch.clamp(env._peak_base_height - current_height - deadzone, min=0.0)
+    return torch.tanh(scale * drop)
+
+
 def radial_distance_progress(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
@@ -452,6 +727,53 @@ def radial_distance_progress(
     # 使用 tanh 平滑奖励，避免过大
     # scale=0.5 表示移动 2m 时奖励约为 0.76，移动 4m 时约为 0.96
     reward = torch.tanh(radial_distance * 0.5)
+
+    return reward
+
+
+def radial_distance_progress_delta(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    deadzone: float = 0.001,
+    scale: float = 150.0,
+    command_name: str = None,
+    cmd_threshold: float = 0.1,
+) -> torch.Tensor:
+    asset: RigidObject = env.scene[asset_cfg.name]
+
+    current_pos_xy = asset.data.root_pos_w[:, :2]
+
+    if not hasattr(env, "_radial_initial_pos_xy"):
+        env._radial_initial_pos_xy = current_pos_xy.clone()
+    if env._radial_initial_pos_xy.shape != current_pos_xy.shape:
+        env._radial_initial_pos_xy = current_pos_xy.clone()
+
+    radial_distance = torch.norm(current_pos_xy - env._radial_initial_pos_xy, dim=1)
+
+    if not hasattr(env, "_prev_radial_distance"):
+        env._prev_radial_distance = radial_distance.clone()
+    if env._prev_radial_distance.shape != radial_distance.shape:
+        env._prev_radial_distance = radial_distance.clone()
+
+    new_episode_mask = env.episode_length_buf == 1
+    if torch.any(new_episode_mask):
+        env._radial_initial_pos_xy = torch.where(
+            new_episode_mask.unsqueeze(-1).expand_as(current_pos_xy),
+            current_pos_xy,
+            env._radial_initial_pos_xy,
+        )
+        radial_distance = torch.norm(current_pos_xy - env._radial_initial_pos_xy, dim=1)
+        env._prev_radial_distance = torch.where(new_episode_mask, radial_distance, env._prev_radial_distance)
+
+    delta = radial_distance - env._prev_radial_distance
+    env._prev_radial_distance = radial_distance.clone()
+
+    delta = torch.clamp(delta - deadzone, min=0.0)
+    reward = torch.tanh(scale * delta)
+
+    if command_name is not None:
+        cmd_norm = torch.norm(env.command_manager.get_command(command_name), dim=1)
+        reward = reward * (cmd_norm > cmd_threshold)
 
     return reward
 

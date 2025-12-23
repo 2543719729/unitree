@@ -54,7 +54,7 @@ from unitree_rl_lab.tasks.locomotion import mdp
 #   - Level 3-5 (难度 0.3-0.6): 简单楼梯
 #   - Level 6-7 (难度 0.6-0.8): 中等楼梯
 #   - Level 8-9 (难度 0.8-1.0): 困难楼梯
-STAIR_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
+STAIR_TERRAIN_CFG = terrain_gen.RowCurriculumTerrainGeneratorCfg(
     size=(8.0, 8.0),              # 每个地形块尺寸
     border_width=20.0,            # 边界宽度
     num_rows=10,                  # 行数（难度等级 0-9）
@@ -102,6 +102,39 @@ STAIR_TERRAIN_CFG = terrain_gen.TerrainGeneratorCfg(
             holes=False,
         ),
     },
+    row_mixes=[
+        terrain_gen.RowTerrainMixCfg(
+            start_row=0,
+            end_row=2,
+            proportions={
+                "flat": 1.0,
+            },
+        ),
+        terrain_gen.RowTerrainMixCfg(
+            start_row=3,
+            end_row=5,
+            proportions={
+                "flat": 0.2,
+                "stairs_up_easy": 0.8,
+            },
+        ),
+        terrain_gen.RowTerrainMixCfg(
+            start_row=6,
+            end_row=7,
+            proportions={
+                "flat": 0.15,
+                "stairs_up_medium": 0.85,
+            },
+        ),
+        terrain_gen.RowTerrainMixCfg(
+            start_row=8,
+            end_row=9,
+            proportions={
+                "flat": 0.1,
+                "stairs_up_hard": 0.9,
+            },
+        ),
+    ],
 )
 
 
@@ -213,7 +246,7 @@ class StairEventCfg:
             "pose_range": {
                 "x": (-0.5, 0.5),
                 "y": (-0.5, 0.5),
-                "yaw": (-0.5, 0.5),  # 减小偏航角范围，让机器人更多面向楼梯
+                "yaw": (-0.2, 0.2),  # [修改] yaw 初始范围：(-0.5, 0.5) -> (-0.2, 0.2)，起步更朝向楼梯，减少“先转向/绕圈”
             },
             "velocity_range": {
                 "x": (0.0, 0.0),
@@ -243,8 +276,8 @@ class StairEventCfg:
         interval_range_s=(8.0, 12.0),  # 降低推力频率（比带传感器模式更宽松）
         params={
             "velocity_range": {
-                "x": (-0.3, 0.3),  # 减小推力强度（比带传感器模式更小）
-                "y": (-0.3, 0.3),
+                "x": (-0.15, 0.15),  # [修改] push 前向扰动：(-0.3, 0.3) -> (-0.15, 0.15)，避免破坏总体前进方向
+                "y": (-0.35, 0.35),  # [修改] push 侧向扰动：(-0.3, 0.3) -> (-0.35, 0.35)，增加横向抗扰但不改变目标前进方向
             }
         },
     )
@@ -262,22 +295,24 @@ class StairCommandsCfg:
 
     base_velocity = mdp.UniformLevelVelocityCommandCfg(
         asset_name="robot",
-        resampling_time_range=(10.0, 10.0),
+        resampling_time_range=(4.0, 6.0),  # [修改] 命令重采样周期：(10.0, 10.0) -> (4.0, 6.0)，提高命令多样性/扰动覆盖
         rel_standing_envs=0.05,  # 5% 站立环境
         rel_heading_envs=1.0,
-        heading_command=False,
+        heading_command=True,
         debug_vis=True,
         # 初始速度范围：小范围，便于学习
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(0.1, 0.3),    # 前进为主
-            lin_vel_y=(-0.05, 0.05), # 限制横向
-            ang_vel_z=(-0.1, 0.1),   # 限制转向
+            lin_vel_y=(-0.04, 0.04), # [修改] 侧向速度范围：(-0.05, 0.05) -> (-0.04, 0.04)，保留小扰动但更接近“纯前进”
+            ang_vel_z=(-0.06, 0.06),   # [修改] 偏航角速度范围：(-0.1, 0.1) -> (-0.06, 0.06)，减少绕圈/走偏（配合 radial_distance_progress）
+            heading=(0.0, 0.0),
         ),
         # 最终速度范围：楼梯上不需要太快
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(0.2, 0.6),    # 前进速度
-            lin_vel_y=(-0.1, 0.1),   # 小幅横向
-            ang_vel_z=(-0.15, 0.15), # 小幅转向
+            lin_vel_y=(-0.06, 0.06),   # [修改] 侧向速度上限：(-0.1, 0.1) -> (-0.06, 0.06)，降低侧向“跑偏”概率
+            ang_vel_z=(-0.1, 0.1), # [修改] 偏航角速度上限：(-0.15, 0.15) -> (-0.1, 0.1)，降低 yaw 漂移
+            heading=(0.0, 0.0),
         ),
     )
 
@@ -419,36 +454,62 @@ class StairBlindRewardsCfg:
     # [重要修复] 降低 alive 奖励
     # 原值 5.0 太高，机器人学会“静止拿奖励”
     # 2.0 让存活仍然重要，但不会压制前进动力
-    alive = RewTerm(func=mdp.is_alive, weight=1.0)
+    alive = RewTerm(func=mdp.is_alive, weight=0.15)
 
-    # [改进版] upward_progress：增强高度进展信号
-    # 改进：1) 放大高度增量50倍 2) 使用tanh归一化 3) 返回值范围[0,2]
-    # delta_scale=50 使每步0.002m→0.1信号，progress_scale=1.0 使1m累计→0.76
     upward_progress = RewTerm(
         func=mdp.upward_progress,
-        weight=1.0,  # 返回值[0,2]，加权后[0,2]
-        params={"delta_scale": 50.0, "progress_scale": 1.0},
+        weight=1.0,
+        params={"delta_scale": 20.0, "progress_scale": 0.0},
+    )
+
+    feet_step_up_touchdown = RewTerm(
+        func=mdp.feet_step_up_touchdown_reward,
+        weight=2.5,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
+            "command_name": "base_velocity",
+            "cmd_threshold": 0.1,
+            "force_threshold": 1.0,
+            "stable_contact_time": 0.01,
+            "min_air_time": 0.02,
+            "min_step_up": 0.015,
+            "tanh_mult": 50.0,
+        },
+    )
+
+    height_drop_from_peak = RewTerm(
+        func=mdp.height_drop_from_peak,
+        weight=-0.6,
+        params={"deadzone": 0.03, "scale": 20.0},
     )
 
     # [方案C] 径向进展奖励：鼓励离开出生位置
     # 适用于 InvertedPyramidStairs 地形（中心低、边缘高）
-    # 返回值范围 [0, 1]，权重 2.0 使其与速度跟踪(3.0)形成互补
+    # 返回值范围 [0, 1]，权重 1.0 使其与速度跟踪(3.0)形成互补  # [修改] 原权重 0.5 -> 1.0
     radial_distance_progress = RewTerm(
-        func=mdp.radial_distance_progress,
-        weight=2.0,
+        func=mdp.radial_distance_progress_delta,
+        weight=1.0,  # [修改] radial_distance_progress 权重：0.5 -> 1.0（推进类增强，与 track_lin_vel_xy 互补，减少“原地抖动/绕圈”局部最优）
+        params={"deadzone": 0.001, "scale": 150.0, "command_name": "base_velocity", "cmd_threshold": 0.1},
+    )
+
+    base_height_relative = RewTerm(
+        func=mdp.base_height_relative,
+        weight=-0.5,
+        params={"target_offset": 0.0, "only_penalize_drop": True},
     )
 
     # ====================== 基座运动正则化 ======================
     # 降低 Z 轴速度惩罚，因为上楼梯时 Z 轴速度自然会增加
-    base_linear_velocity = RewTerm(func=mdp.lin_vel_z_l2, weight=-0.5)#惩罚Z轴线速度（上下颠簸
-    base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)#惩罚X/Y轴角速度（左右摇晃）
+    base_linear_velocity = RewTerm(func=mdp.lin_vel_z_l2, weight=-0.5)  # [修改] lin_vel_z 惩罚：-1.0 -> -0.5，避免楼梯抬升导致“正常z速度”被过度惩罚
+    base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.1)#惩罚X/Y轴角速度（左右摇晃）
 
     # ====================== 关节运动正则化 ======================
-    joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)  #惩罚关节速度
+    joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.0005)  # [修改] joint_vel 惩罚：-0.001 -> -0.0005，减少对“跨阶需要更快摆腿”的抑制
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7) #惩罚关节加速度
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.01) # 降低动作惩罚鼓励探索
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.01) # [修改] action_rate 惩罚：-0.02 -> -0.01，降低对探索/抬腿动作的压制
     # [修复] 原值 -5.0 太高，训练初期关节容易超限导致大量惩罚
-    dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-1.0) #惩罚关节位置限制
+    dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-0.7) #惩罚关节位置限制
     energy = RewTerm(func=mdp.energy, weight=-2e-5) #惩罚能量消耗
 
     # ====================== 关节偏差惩罚 ======================
@@ -465,13 +526,13 @@ class StairBlindRewardsCfg:
 
     joint_deviation_waists = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.8,
+        weight=-0.25,  # [修改] waist 偏差惩罚：-0.5 -> -0.25，允许楼梯阶段必要的躯干/腰部配合
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=["waist.*"])},
     )
 
     joint_deviation_legs = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-1.0,
+        weight=-0.25,  # [修改] hip_roll/hip_yaw 偏差惩罚：-0.5 -> -0.25，减少对腿部姿态调整（跨阶/平衡）的限制
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot", joint_names=[".*_hip_roll_joint", ".*_hip_yaw_joint"]
@@ -481,7 +542,7 @@ class StairBlindRewardsCfg:
 
     # ====================== 姿态奖励 ======================
     # 增强姿态惩罚，保持躯干直立（替代 base_height_l2 的作用）
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-4.0)
+    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.2)  # [修改] 姿态惩罚：-2.0 -> -1.2，避免楼梯正常pitch波动被过度惩罚
 
     # 盲爬模式：移除 base_height_l2
     # 原因：在楼梯上，机器人的绝对高度会随着攀爬而增加
@@ -491,31 +552,67 @@ class StairBlindRewardsCfg:
     # 新增：膝关节弯曲惩罚，防止蹲着走
     joint_deviation_knees = RewTerm(
         func=mdp.joint_deviation_l1,
-        weight=-0.9,
+        weight=-0.3,  # [修改] knee 偏差惩罚：-0.4 -> -0.3，允许必要屈膝抬腿但仍抑制“蹲着走”
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_knee_joint"])
         },
     )
 
+    leg_joint_symmetry = RewTerm(
+        func=mdp.joint_symmetry_out_of_phase,
+        weight=-0.1,  # [新增] 左右腿对称性惩罚（之前无此项；初版 -0.15，后调为 -0.1），缓解“右腿抬高/左腿抬低”不一致
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
+            "pitch_mirror_joints": [
+                ["left_hip_pitch_joint", "right_hip_pitch_joint"],
+                ["left_knee_joint", "right_knee_joint"],
+                ["left_ankle_pitch_joint", "right_ankle_pitch_joint"],
+            ],
+            "roll_mirror_joints": [
+                ["left_hip_roll_joint", "right_hip_roll_joint"],
+            ],
+            "yaw_mirror_joints": [
+                ["left_hip_yaw_joint", "right_hip_yaw_joint"],
+            ],
+            "force_threshold": 1.0,
+            "stable_contact_time": 0.03,
+            "roll_scale": 0.2,
+            "yaw_scale": 0.1,
+        },
+    )
+
     # ====================== 步态奖励 ======================
     gait = RewTerm(
-        func=mdp.feet_gait,
-        weight=0.5,
+        func=mdp.air_time_variance_penalty_with_cmd,
+        weight=-0.05,
         params={
-            "period": 1.0,
-            "offset": [0.0, 0.5],
-            "threshold": 0.55,
             "command_name": "base_velocity",
+            "cmd_threshold": 0.1,
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
         },
     )
 
+    feet_air_time = RewTerm(
+        func=mdp.feet_air_time,
+        weight=0.6,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
+            "command_name": "base_velocity",
+            "threshold": 0.3,
+        },
+    )
+
     feet_slide = RewTerm(
-        func=mdp.feet_slide,
-        weight=-0.3,
+        func=mdp.feet_slide_stairs,
+        weight=-0.25,  # [修改] feet_slide 惩罚：-0.3 -> -0.25，略放宽避免打滑项压制推进/抬腿学习
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
+            "force_threshold": 1.0,
+            "stable_contact_time": 0.03,
+            "slip_velocity_deadzone": 0.05,
+            "tanh_mult": 3.0,
         },
     )
 
@@ -524,20 +621,23 @@ class StairBlindRewardsCfg:
     # 原因：过高的目标高度导致机器人重心不稳，容易倾倒
     # 0.12m 足以跨越 8-12cm 的简单楼梯，更高难度的楼梯通过课程学习逐步挑战
     feet_clearance = RewTerm(
-        func=mdp.foot_clearance_reward,
-        weight=1.2,
+        func=mdp.foot_clearance_reward_swing,
+        weight=0.6,
         params={
             "std": 0.05,
             "tanh_mult": 2.0,
-            "target_height": 0.20,  # [修复] 从 0.20 降低到 0.12
+            "target_height": 0.12,  # [修复] 从 0.20 降低到 0.12
             "asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
+            "command_name": "base_velocity",
+            "cmd_threshold": 0.1,
         },
     )
 
     # ====================== 安全惩罚 ======================
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
-        weight=-0.8,
+        weight=-0.5,
         params={
             "threshold": 1,
             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=["(?!.*ankle.*).*"]),
@@ -569,8 +669,8 @@ class StairTerminationsCfg:
     bad_orientation = DoneTerm(
         func=mdp.bad_orientation_with_grace,
         params={
-            "limit_angle": 1.3,      # 86° 倾斜角阈值（放宽，训练初期更宽容）
-            "grace_steps": 25,       # 保护期 25 步（延长稳定时间）
+            "limit_angle": 1.05,      # [修改] 倾斜阈值：0.75rad -> 1.05rad（约43°->60°），楼梯任务更宽容（注：单位是弧度）
+            "grace_steps": 30,       # [修改] 保护期：25 -> 30 steps，减少起步抖动导致的早停
         },
     )
 
@@ -587,12 +687,15 @@ class StairCurriculumCfg:
     根据机器人表现自动调整地形难度等级
     """
 
-    # 基于存活率的地形课程学习（更适合训练初期）
+    # 基于存活率 + 爬升高度的地形课程学习（避免仅靠存活就升级）
     terrain_levels = CurrTerm(
-        func=mdp.terrain_levels_survival,
+        func=mdp.terrain_levels_survival_with_height,
         params={
-            "survival_ratio_upgrade": 0.5,    # 存活 50% 时间则升级
+            "survival_ratio_upgrade": 0.5,    # 存活 50% 时间且爬升达到阈值才升级
             "survival_ratio_downgrade": 0.15, # 存活 < 15% 则降级
+            "upgrade_height": 0.2,            # 爬升 20cm（约 2 级台阶）才升级
+            "flat_max_terrain_level": 2,
+            "flat_min_distance": 1.5,
         },
     )
     
@@ -753,10 +856,26 @@ class StairBlindPlayEnvCfg(StairBlindEnvCfg):
     """盲爬楼梯演示环境配置"""
 
     def __post_init__(self):
+        # [演示专用] 固定地形难度与分布，让 play 时尽量稳定出现在 4~5 级楼梯
+        # 注意：play.py 会用 entry_point_key="play_env_cfg_entry_point" 加载本配置
+        # 因此这里的改动不会影响训练（训练用 StairBlindEnvCfg）
+        #
+        # 1) 禁用 terrain_levels curriculum（否则演示过程中地形会根据表现上下漂移）
+        self.curriculum.terrain_levels = None
+
         super().__post_init__()
 
         self.scene.num_envs = 32
-        self.scene.terrain.terrain_generator.num_rows = 3
+
+        # [方案A] 不要把 num_rows 限制成 3。
+        # num_rows=3 只包含 row=0~2，而 0~2 在 row_mixes 里是 100% flat，所以演示永远是平地。
+        # 这里恢复到 10 行（0~9），才能包含楼梯行（3~9）。
+        self.scene.terrain.terrain_generator.num_rows = 10
         self.scene.terrain.terrain_generator.num_cols = 8
 
+        # [方案B] 演示启动时把初始地形等级固定在 5（对应简单楼梯段 3~5 的上限）。
+        # 训练阶段我们设置为 0 是为了从平地起步；演示阶段为了直观看楼梯，设为 5。
+        self.scene.terrain.max_init_terrain_level = 5
+
+        # 演示时直接使用最终速度范围
         self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges

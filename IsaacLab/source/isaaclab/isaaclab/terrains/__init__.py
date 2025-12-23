@@ -20,6 +20,7 @@ There are two main components in this package:
 
 """
 from .height_field import *  # noqa: F401, F403
+from .row_curriculum_terrain_generator import RowCurriculumTerrainGenerator, RowCurriculumTerrainGeneratorCfg, RowTerrainMixCfg
 from .sub_terrain_cfg import FlatPatchSamplingCfg, SubTerrainBaseCfg
 from .terrain_generator import TerrainGenerator
 from .terrain_generator_cfg import TerrainGeneratorCfg
